@@ -1,4 +1,4 @@
-# ConcreSense dataset generated 2026-08-04T22:18:35.805764
+# ConcreSense dataset generated 2026-08-04T23:29:26.272056
 # data_source=synthetic_physics rows are SIMULATED, not measured.
 # Models: Lichtenecker mixture rule; Malmberg-Maryott (1956) eps_w(T);
 #         Prandtl flat-punch (2+pi); Hu & de Larrard slump<->tau0;

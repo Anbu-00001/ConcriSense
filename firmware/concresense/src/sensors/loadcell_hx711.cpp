@@ -116,8 +116,11 @@ SensorStatus LoadCellHX711::tare(uint8_t samples) {
 
 Reading LoadCellHX711::read() {
   Reading r;
-  if (status_ == SensorStatus::ABSENT) {
-    r.status = SensorStatus::ABSENT;
+  // Gate on OK, not just on ABSENT. A chip in OUT_OF_RANGE clocks out words
+  // happily, so an ABSENT-only check would return a confident 0.00 from a
+  // disconnected bridge -- a value indistinguishable from a real zero load.
+  if (status_ != SensorStatus::OK) {
+    r.status = status_;
     return r;
   }
 

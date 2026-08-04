@@ -15,9 +15,11 @@
 
 // ---------------------------------------------------------------- anchors
 //
-// Measured per-board via tools/calibrate.py. The defaults below are typical
-// values for a capacitive v1.2 sensor at 3.3V and exist only so the firmware
-// runs before calibration -- they are NOT valid for real measurement.
+// Measured per-board with the on-device 'cm' and 'cl' serial commands, and
+// persisted to NVS (see anchors_store.h). The defaults below are typical values
+// for a capacitive v1.2 sensor at 3.3V and exist only so the firmware runs
+// before calibration -- they are NOT valid for real measurement, which is why
+// `calibrated` gates every derived reading.
 struct MoistureAnchors {
   float mvDry = 2900.0f;   // probe in air / oven-dry sand
   float mvSat = 1300.0f;   // probe fully immersed in water
