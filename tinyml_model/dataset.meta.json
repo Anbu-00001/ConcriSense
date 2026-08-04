@@ -1,0 +1,34 @@
+{
+  "generated": "2026-08-04T22:17:51.302478",
+  "n_synthetic": 900,
+  "n_real": 0,
+  "seed": 42,
+  "class_balance": {
+    "GOOD": 53,
+    "MARGINAL": 299,
+    "REJECT": 548
+  },
+  "synthetic_separability_cv": {
+    "cv_mean": 0.7611111111111111,
+    "cv_std": 0.027666443551086085,
+    "importances": {
+      "penetration_force_n": 0.1922,
+      "temperature_c": 0.1793,
+      "vib_damping_ratio": 0.1623,
+      "moisture_mv": 0.1365,
+      "vib_spectral_entropy": 0.1211,
+      "vib_rms_g": 0.1123,
+      "vib_dominant_hz": 0.0964
+    }
+  },
+  "validated_against_real_concrete": false,
+  "feature_columns": [
+    "moisture_mv",
+    "temperature_c",
+    "penetration_force_n",
+    "vib_rms_g",
+    "vib_dominant_hz",
+    "vib_spectral_entropy",
+    "vib_damping_ratio"
+  ]
+}
