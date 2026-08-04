@@ -214,35 +214,67 @@ def classify_is456(wc, slump_mm, temp_c) -> np.ndarray:
 
 
 # ----------------------------------------------------------------- generation
+def _sample_pool(size: int, rng):
+    """Candidate physical states, with deliberate mass near class boundaries."""
+    n_bulk = int(size * 0.67)
+    n_edge = size - n_bulk
+
+    wc = np.concatenate([
+        rng.uniform(0.30, 0.65, n_bulk),
+        rng.choice([0.35, 0.40, 0.50, 0.55], n_edge) + rng.normal(0, 0.018, n_edge),
+    ])
+    slump = np.clip(np.concatenate([
+        rng.uniform(10.0, 220.0, n_bulk),
+        rng.choice([50.0, 125.0, 150.0], n_edge) + rng.normal(0, 7.0, n_edge),
+    ]), 0.0, 260.0)
+    temp = np.clip(np.concatenate([
+        rng.normal(30.0, 5.5, n_bulk),
+        rng.choice([35.0, 40.0], n_edge) + rng.normal(0, 1.6, n_edge),
+    ]), 12.0, 48.0)
+
+    return wc, slump, temp
+
+
 def generate(n: int, seed: int = 42):
     rng = np.random.default_rng(seed)
 
-    # Sample the physical state space directly, with the ranges deliberately
-    # overlapping the class boundaries so the set is not trivially separable.
-    # A third of samples are drawn near a threshold on purpose -- boundary cases
-    # are where a screening device actually has to work.
-    n_bulk = int(n * 0.67)
-    n_edge = n - n_bulk
+    # Stratified sampling, because uniform sampling of the physical space does
+    # NOT give usable classes. REJECT fires on any one of four independent
+    # violations (w/c high, w/c low, slump high, temp high) while GOOD requires
+    # all three parameters inside narrow windows simultaneously. Sampled
+    # uniformly that yields ~6% GOOD against ~61% REJECT -- an imbalance severe
+    # enough that a classifier maximises accuracy by never predicting GOOD,
+    # which is precisely the class the device exists to identify.
+    #
+    # So: oversample a large pool, label it, then draw equal counts per class.
+    # Class balance is a sampling decision, not a property of the physics.
+    target = n // len(CLASSES)
+    quota = {c: target for c in CLASSES}
+    for c in CLASSES[: n - target * len(CLASSES)]:
+        quota[c] += 1
 
-    wc_bulk = rng.uniform(0.30, 0.65, n_bulk)
-    edge_centres = rng.choice([0.35, 0.40, 0.50, 0.55], n_edge)
-    wc_edge = edge_centres + rng.normal(0, 0.018, n_edge)
-    wc = np.concatenate([wc_bulk, wc_edge])
+    buckets = {c: {"wc": [], "slump": [], "temp": []} for c in CLASSES}
+    attempts = 0
+    while any(len(buckets[c]["wc"]) < quota[c] for c in CLASSES) and attempts < 200:
+        attempts += 1
+        pw, ps, pt = _sample_pool(max(n * 8, 4000), rng)
+        plabels = classify_is456(pw, ps, pt)
+        for c in CLASSES:
+            need = quota[c] - len(buckets[c]["wc"])
+            if need <= 0:
+                continue
+            idx = np.flatnonzero(plabels == c)[:need]
+            buckets[c]["wc"].extend(pw[idx])
+            buckets[c]["slump"].extend(ps[idx])
+            buckets[c]["temp"].extend(pt[idx])
 
-    slump = np.concatenate([
-        rng.uniform(10.0, 220.0, n_bulk),
-        rng.choice([50.0, 125.0, 150.0], n_edge) + rng.normal(0, 7.0, n_edge),
-    ])
-    slump = np.clip(slump, 0.0, 260.0)
+    wc = np.array([v for c in CLASSES for v in buckets[c]["wc"]])
+    slump = np.array([v for c in CLASSES for v in buckets[c]["slump"]])
+    temp = np.array([v for c in CLASSES for v in buckets[c]["temp"]])
 
-    temp = np.concatenate([
-        rng.normal(30.0, 5.5, n_bulk),
-        rng.choice([35.0, 40.0], n_edge) + rng.normal(0, 1.6, n_edge),
-    ])
-    temp = np.clip(temp, 12.0, 48.0)
-
-    order = rng.permutation(n)
+    order = rng.permutation(len(wc))
     wc, slump, temp = wc[order], slump[order], temp[order]
+    n = len(wc)
 
     # --- labels come from TRUE physical values
     labels = classify_is456(wc, slump, temp)
