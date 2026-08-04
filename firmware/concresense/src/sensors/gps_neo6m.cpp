@@ -29,7 +29,7 @@ void GpsNeo6M::poll() {
   }
 }
 
-GpsFix GpsNeo6M::fix() const {
+GpsFix GpsNeo6M::fix() {
   GpsFix f;
   if (!sawNmea_) return f;
 

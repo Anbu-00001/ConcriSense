@@ -12,30 +12,37 @@ SensorStatus MoistureCapacitive::begin() {
 
   delay(10);
 
-  // GPIO34 is input-only with no internal pull-ups, so an unconnected pin
-  // floats near rail and drifts. A sensor that is actually powered and driving
-  // the pin parks somewhere in the middle of the range and stays put, so both
-  // the level and its stability are checked.
-  uint32_t mvSum = 0;
-  uint32_t mvMin = UINT32_MAX, mvMax = 0;
+  // GPIO34 is input-only with no internal pull-ups, so an unconnected pin sits
+  // at a rail. A sensor that is actually powered and driving the pin parks
+  // mid-range and holds there, so level and stability are both checked.
+  //
+  // Presence is decided on RAW COUNTS, not millivolts. This is not a style
+  // choice: at 11dB attenuation the ESP32's calibrated conversion has a floor
+  // of roughly 140mV, so a pin reading a hard 0 counts still reports ~142mV.
+  // Measured on this board with nothing connected: raw 0 -> 142mV. A
+  // millivolt-based floor can therefore never detect a grounded/floating-low
+  // pin, and the channel would report OK while feeding a constant into the
+  // classifier -- exactly the silent-garbage failure this check exists to stop.
+  uint32_t rawSum = 0;
+  uint16_t rawMin = 4095, rawMax = 0;
   for (uint8_t i = 0; i < 16; i++) {
-    const uint32_t mv = analogReadMilliVolts(PIN_MOISTURE_AOUT);
-    mvSum += mv;
-    if (mv < mvMin) mvMin = mv;
-    if (mv > mvMax) mvMax = mv;
+    const uint16_t raw = analogRead(PIN_MOISTURE_AOUT);
+    rawSum += raw;
+    if (raw < rawMin) rawMin = raw;
+    if (raw > rawMax) rawMax = raw;
     delay(2);
   }
-  const uint32_t mean = mvSum / 16;
-  const uint32_t spread = mvMax - mvMin;
+  const uint16_t rawMean = rawSum / 16;
+  const uint16_t rawSpread = rawMax - rawMin;
 
   // Pinned to either rail => nothing is driving the pin.
-  if (mean < 60 || mean > 3200) {
+  if (rawMean <= 8 || rawMean >= 4087) {
     status_ = SensorStatus::ABSENT;
     return status_;
   }
-  // Mid-scale but wandering hundreds of mV => floating pin picking up noise,
-  // not a sensor holding a level.
-  if (spread > 400) {
+  // Mid-scale but wandering => floating pin picking up noise, not a sensor
+  // holding a level. ~500 counts at 12 bits is ~0.4V of wander.
+  if (rawSpread > 500) {
     status_ = SensorStatus::ABSENT;
     return status_;
   }

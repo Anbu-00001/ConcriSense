@@ -29,11 +29,13 @@ class GpsNeo6M {
   // the hardware FIFO will overflow if it is left unattended.
   void poll();
 
-  GpsFix fix() const;
+  // Non-const because TinyGPS++'s accessors are themselves non-const: reading
+  // a field clears its "updated" flag, so querying mutates the parser.
+  GpsFix fix();
 
   bool moduleDetected() const { return sawNmea_; }
-  uint32_t sentencesParsed() const { return gps_.sentencesWithFix(); }
-  uint32_t checksumErrors() const { return gps_.failedChecksum(); }
+  uint32_t sentencesParsed() { return gps_.sentencesWithFix(); }
+  uint32_t checksumErrors() { return gps_.failedChecksum(); }
   SensorStatus status() const { return status_; }
 
  private:

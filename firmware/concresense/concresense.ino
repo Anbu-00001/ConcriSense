@@ -12,6 +12,9 @@
 
 #include "src/config.h"
 #include "src/display/oled_ssd1306.h"
+#include "src/features/fft_features.h"
+#include "src/physics/anchors_store.h"
+#include "src/physics/calibration.h"
 #include "src/sensor_status.h"
 #include "src/sensors/gps_neo6m.h"
 #include "src/sensors/imu_mpu6050.h"
@@ -25,6 +28,12 @@ TempDS18B20 temp;
 LoadCellHX711 loadcell;
 ImuMPU6050 imu;
 GpsNeo6M gps;
+
+MoistureAnchors moistureAnchors;
+LoadCellAnchors loadAnchors;
+
+// Burst buffer, static so a measurement never allocates mid-cycle.
+static float gBurst[IMU_BURST_SAMPLES];
 
 struct Subsystem {
   const char* name;
@@ -98,6 +107,260 @@ static void printReport() {
   Serial.println(F("==============================================\n"));
 }
 
+// ------------------------------------------------- Phase 2: measurement
+//
+// One full cycle: sample every channel, extract vibration features, run the
+// physics chain, and apply the IS 456 rule engine. Phase 3 replaces the rule
+// engine with the TinyML classifier and keeps the rules as a cross-check.
+static void runMeasurementCycle(bool csv) {
+  // Quiesce the OLED for the duration of the burst. The display and the IMU
+  // share one I2C bus, and a full 128x64 frame push is ~20ms -- enough to drop
+  // four samples out of a 200Hz window and skew the FFT bin spacing.
+  const bool haveImu = imu.status() == SensorStatus::OK;
+
+  float achievedHz = NAN;
+  uint16_t got = 0;
+  VibrationFeatures vf;
+
+  if (haveImu) {
+    got = imu.captureBurst(gBurst, IMU_BURST_SAMPLES, achievedHz);
+    if (got == IMU_BURST_SAMPLES) {
+      // Deliberately uses the ACHIEVED rate, not IMU_SAMPLE_RATE_HZ: bus
+      // contention makes them differ, and using the nominal rate would put the
+      // reported dominant frequency systematically off.
+      vf = extractVibrationFeatures(gBurst, got, achievedHz);
+    }
+  }
+
+  Reading mv = moisture.readMilliVolts();
+  Reading tc = temp.readCelsius();
+  Reading load = loadcell.read();
+
+  const float tempC = tc.valid() ? tc.value : NAN;
+  DerivedProperties d = deriveAll(mv.valid() ? mv.value : NAN, tempC,
+                                  load.valid() ? load.value : NAN,
+                                  moistureAnchors, loadAnchors);
+
+  QualityClass q = QualityClass::UNKNOWN;
+  if (d.wcValid && d.slumpValid) {
+    q = classifyIS456(d.wcRatio, d.slumpMm, tempC);
+  }
+
+  if (csv) {
+    // Matches FEATURE_COLUMNS in tinyml_model/dataset_generator.py so real
+    // readings can be merged with --merge-real. Blank fields stay blank rather
+    // than becoming zero: a zero would be indistinguishable from a real value
+    // and would poison the training set.
+    Serial.print(F("CSV,"));
+    if (mv.valid()) Serial.print(mv.value, 1); Serial.print(',');
+    if (tc.valid()) Serial.print(tc.value, 4); Serial.print(',');
+    if (load.valid()) Serial.print(load.value, 4); Serial.print(',');
+    if (vf.valid) Serial.print(vf.rms, 5); Serial.print(',');
+    if (vf.valid) Serial.print(vf.dominantFreqHz, 3); Serial.print(',');
+    if (vf.valid) Serial.print(vf.spectralEntropy, 5); Serial.print(',');
+    if (vf.valid) Serial.print(vf.dampingRatio, 5);
+    Serial.println();
+    return;
+  }
+
+  Serial.println(F("\n----------- measurement cycle -----------"));
+  Serial.print(F("  moisture   : "));
+  if (mv.valid()) Serial.printf("%.0f mV\n", mv.value);
+  else Serial.println(statusName(moisture.status()));
+
+  Serial.print(F("  temperature: "));
+  if (tc.valid()) Serial.printf("%.2f C\n", tc.value);
+  else Serial.println(statusName(temp.status()));
+
+  Serial.print(F("  load       : "));
+  if (load.valid()) Serial.printf("%.2f (raw units)\n", load.value);
+  else Serial.println(statusName(loadcell.status()));
+
+  Serial.print(F("  vibration  : "));
+  if (vf.valid) {
+    Serial.printf("%u samples @ %.1f Hz\n", got, achievedHz);
+    Serial.printf("               rms=%.4f g  dom=%.2f Hz  entropy=%.3f  "
+                  "damping=%.4f\n",
+                  vf.rms, vf.dominantFreqHz, vf.spectralEntropy, vf.dampingRatio);
+    if (vf.dominantFreqHz > 40.0f) {
+      Serial.println(F("               (near the 44Hz DLPF corner - this peak"
+                       " is filter-shaped)"));
+    }
+  } else {
+    Serial.println(haveImu ? F("burst incomplete") : F("ABSENT"));
+  }
+
+  Serial.println(F("  --- derived ---"));
+  if (d.wcValid) {
+    Serial.printf("  eps_mix=%.2f  v_water=%.4f  w/c=%.3f\n", d.epsilonMix,
+                  d.waterVolFrac, d.wcRatio);
+  } else {
+    Serial.print(F("  w/c        : unavailable ("));
+    Serial.println(moistureAnchors.calibrated ? F("sensor/range)")
+                                              : F("NOT CALIBRATED - run 'cm')"));
+  }
+  if (d.slumpValid) {
+    Serial.printf("  tau_0=%.0f Pa  slump=%.1f mm\n", d.yieldStressPa, d.slumpMm);
+  } else {
+    Serial.print(F("  slump      : unavailable ("));
+    Serial.println(loadAnchors.calibrated ? F("no load reading)")
+                                          : F("NOT CALIBRATED - run 'cl')"));
+  }
+
+  Serial.printf("  IS 456     : %s\n", qualityName(q));
+  if (q == QualityClass::UNKNOWN) {
+    Serial.println(F("  (UNKNOWN is correct here - the device refuses to"));
+    Serial.println(F("   classify without calibrated inputs rather than"));
+    Serial.println(F("   emitting a confident-looking guess.)"));
+  }
+  Serial.println(F("-----------------------------------------\n"));
+
+  if (oled.status() == SensorStatus::OK) {
+    char l0[24], l1[24], l2[24];
+    snprintf(l0, sizeof(l0), "IS456: %s", qualityName(q));
+    if (d.wcValid) snprintf(l1, sizeof(l1), "w/c  %.2f", d.wcRatio);
+    else snprintf(l1, sizeof(l1), "w/c  --");
+    if (d.slumpValid) snprintf(l2, sizeof(l2), "slump %.0fmm", d.slumpMm);
+    else snprintf(l2, sizeof(l2), "slump --");
+    const char* lines[] = {l0, l1, l2};
+    oled.showStatusGrid(lines, 3);
+  }
+}
+
+// ------------------------------------------------- Phase 2: calibration
+//
+// Range anchoring, stated for what it is. Dipping the probe in air and water
+// establishes the ADC span and offset of THIS board's sensor. It does not
+// calibrate against concrete and does not pretend to: it makes the dielectric
+// index meaningful on this hardware, and the physics chain does the rest.
+static void calibrateMoisture() {
+  if (moisture.status() != SensorStatus::OK) {
+    Serial.println(F("moisture sensor ABSENT - cannot calibrate."));
+    return;
+  }
+  Serial.println(F("\n=== moisture range anchoring ==="));
+  Serial.println(F("This sets the ADC span for THIS board. It is NOT a"));
+  Serial.println(F("calibration against concrete.\n"));
+
+  Serial.println(F("1) Hold the probe in DRY AIR, then send any key."));
+  while (!Serial.available()) delay(50);
+  while (Serial.available()) Serial.read();
+  delay(300);
+  const float dry = moisture.readMilliVolts().value;
+  Serial.printf("   dry anchor  = %.0f mV\n", dry);
+
+  Serial.println(F("2) Immerse the probe in WATER to its marked line, then"
+                   " send any key."));
+  while (!Serial.available()) delay(50);
+  while (Serial.available()) Serial.read();
+  delay(300);
+  const float sat = moisture.readMilliVolts().value;
+  Serial.printf("   wet anchor  = %.0f mV\n", sat);
+
+  if (dry - sat < 200.0f) {
+    Serial.println(F("\nREJECTED: span < 200mV. A working v1.2 sensor should"));
+    Serial.println(F("show ~1000-1600mV between air and water. Check that the"));
+    Serial.println(F("board is powered from 3V3 and that AOUT is on GPIO34."));
+    return;
+  }
+
+  moistureAnchors.mvDry = dry;
+  moistureAnchors.mvSat = sat;
+  Reading t = temp.readCelsius();
+  moistureAnchors.refTempC = t.valid() ? t.value : 25.0f;
+  moistureAnchors.calibrated = true;
+  anchors::saveMoisture(moistureAnchors);
+
+  Serial.printf("\nSaved. span=%.0f mV at %.1f C\n", dry - sat,
+                moistureAnchors.refTempC);
+}
+
+static void calibrateLoadCell() {
+  if (loadcell.status() != SensorStatus::OK) {
+    Serial.println(F("load cell ABSENT - cannot calibrate."));
+    return;
+  }
+  Serial.println(F("\n=== load cell calibration ==="));
+  Serial.println(F("1) Remove all load, then send any key to tare."));
+  while (!Serial.available()) delay(50);
+  while (Serial.available()) Serial.read();
+  loadcell.tare(20);
+  Serial.printf("   tared, offset = %ld\n", (long)loadcell.offset());
+
+  Serial.println(F("2) Place a KNOWN mass on the plunger. Type its mass in"));
+  Serial.println(F("   grams and press enter (e.g. 500)."));
+  while (!Serial.available()) delay(50);
+  const float grams = Serial.parseFloat();
+  while (Serial.available()) Serial.read();
+
+  if (grams <= 0.0f) {
+    Serial.println(F("   invalid mass - aborted."));
+    return;
+  }
+
+  int32_t raw;
+  if (!loadcell.readRawMedian(15, raw)) {
+    Serial.println(F("   read failed - aborted."));
+    return;
+  }
+  const float counts = (float)(raw - loadcell.offset());
+  const float newtons = grams * 0.00980665f;  // gram-force -> N
+  if (fabsf(counts) < 100.0f) {
+    Serial.println(F("   REJECTED: mass produced almost no change. Check the"));
+    Serial.println(F("   cell wiring and that the mass is on the plunger."));
+    return;
+  }
+
+  loadAnchors.countsPerNewton = counts / newtons;
+  loadAnchors.calibrated = true;
+  anchors::saveLoadCell(loadAnchors);
+  Serial.printf("   %.1f g = %.3f N -> %.1f counts/N. Saved.\n", grams, newtons,
+                loadAnchors.countsPerNewton);
+}
+
+static void printHelp() {
+  Serial.println(F("\ncommands:"));
+  Serial.println(F("  m  - run one measurement cycle"));
+  Serial.println(F("  c  - run measurement, print as CSV (for --merge-real)"));
+  Serial.println(F("  cm - calibrate moisture range anchors"));
+  Serial.println(F("  cl - calibrate load cell"));
+  Serial.println(F("  s  - show calibration state"));
+  Serial.println(F("  x  - erase stored calibration"));
+  Serial.println(F("  h  - this help\n"));
+}
+
+static void printCalState() {
+  Serial.println(F("\ncalibration state:"));
+  Serial.printf("  moisture : %s (dry=%.0fmV sat=%.0fmV @%.1fC)\n",
+                moistureAnchors.calibrated ? "CALIBRATED" : "not calibrated",
+                moistureAnchors.mvDry, moistureAnchors.mvSat,
+                moistureAnchors.refTempC);
+  Serial.printf("  load cell: %s (%.1f counts/N, plunger %.2f mm^2)\n",
+                loadAnchors.calibrated ? "CALIBRATED" : "not calibrated",
+                loadAnchors.countsPerNewton, loadAnchors.plungerAreaM2 * 1e6f);
+  if (!moistureAnchors.calibrated || !loadAnchors.calibrated) {
+    Serial.println(F("  -> derived w/c and slump stay suppressed until both"));
+    Serial.println(F("     are calibrated. This is intentional."));
+  }
+  Serial.println();
+}
+
+static void handleCommand() {
+  if (!Serial.available()) return;
+  const String cmd = Serial.readStringUntil('\n');
+  String c = cmd;
+  c.trim();
+
+  if (c == "m") runMeasurementCycle(false);
+  else if (c == "c") runMeasurementCycle(true);
+  else if (c == "cm") calibrateMoisture();
+  else if (c == "cl") calibrateLoadCell();
+  else if (c == "s") printCalState();
+  else if (c == "x") { anchors::clear(); Serial.println(F("calibration erased (reboot to apply)")); }
+  else if (c == "h") printHelp();
+  else if (c.length()) Serial.println(F("unknown command - 'h' for help"));
+}
+
 // ---------------------------------------------------------------- setup
 void setup() {
   Serial.begin(SERIAL_BAUD);
@@ -105,6 +368,10 @@ void setup() {
   banner();
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
+
+  // Restore per-board calibration before any driver runs, so the bring-up
+  // report can state whether this board is calibrated.
+  anchors::load(moistureAnchors, loadAnchors);
 
   if (BRINGUP_I2C_SCAN) scanI2C();
 
@@ -164,6 +431,14 @@ void setup() {
                        " needed."));
     }
     record("HX711", s, "GPIO18/19, portMUX-guarded");
+  } else if (s == SensorStatus::OUT_OF_RANGE) {
+    // Distinct from ABSENT: the pin did clock out a word, but a railed or zero
+    // value means a floating DOUT or a disconnected/shorted bridge, not a
+    // missing chip. Different fault, different fix.
+    Serial.println(F("       clocked a word but it was railed - floating DOUT,"
+                     " or the load"));
+    Serial.println(F("       cell bridge (E+/E-/A+/A-) is not connected."));
+    record("HX711", s, "railed reading, check bridge");
   } else {
     record("HX711", s, "DOUT never went low");
   }
@@ -212,13 +487,17 @@ void setup() {
     oled.showStatusGrid(lines, 3);
   }
 
-  Serial.println(F("Entering live loop (1 Hz). Ctrl-C to exit monitor.\n"));
+  printCalState();
+  printHelp();
+  Serial.println(F("Entering live loop (1 Hz telemetry).\n"));
 }
 
 // ---------------------------------------------------------------- loop
 void loop() {
   static uint32_t n = 0;
   gps.poll();  // drain UART every pass so the FIFO never overflows
+
+  handleCommand();
 
   Serial.printf("[%6lu] ", (unsigned long)++n);
 
