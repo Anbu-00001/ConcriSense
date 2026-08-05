@@ -137,6 +137,7 @@ DerivedProperties deriveAll(float moistureMv, float tempC, float loadCounts,
   // --- force chain
   if (!isnan(loadCounts) && la.countsPerNewton > 0.0f) {
     const float forceN = loadCounts / la.countsPerNewton;
+    d.forceN = forceN;
     d.yieldStressPa = penetrationForceToYieldStress(forceN, la.plungerAreaM2);
     d.slumpMm = yieldStressToSlumpMm(d.yieldStressPa);
     d.slumpValid = la.calibrated && !isnan(d.slumpMm);

@@ -1,0 +1,23 @@
+{
+  "generated": "2026-08-05T11:35:11.193288",
+  "n_rows": 900,
+  "hidden_units": 12,
+  "held_out_accuracy": 0.7056,
+  "train_accuracy": 0.7542,
+  "class_order": [
+    "GOOD",
+    "MARGINAL",
+    "REJECT"
+  ],
+  "feature_order": [
+    "moisture_mv",
+    "temperature_c",
+    "penetration_force_n",
+    "vib_rms_g",
+    "vib_dominant_hz",
+    "vib_spectral_entropy",
+    "vib_damping_ratio"
+  ],
+  "quantization": "none (float32) -- see train_classifier.py docstring",
+  "validated_against_real_concrete": false
+}

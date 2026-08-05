@@ -38,6 +38,9 @@ struct DerivedProperties {
   float epsilonMix = NAN;    // apparent relative permittivity
   float waterVolFrac = NAN;  // v_w
   float wcRatio = NAN;       // water/cement by mass
+  float forceN = NAN;        // penetration force -- also a MODEL INPUT, so it
+                             // is surfaced here rather than recomputed by the
+                             // caller with a possibly-different scale factor
   float yieldStressPa = NAN; // tau_0
   float slumpMm = NAN;
   bool wcValid = false;

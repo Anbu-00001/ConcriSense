@@ -98,10 +98,24 @@ def load_dataset(path: pathlib.Path):
     return X, y
 
 
+def cf(v) -> str:
+    """
+    Format one float as a valid C float literal.
+
+    %g alone is not enough: a whole number renders as "2362", and "2362f" is not
+    a legal C++ literal (g++ reads it as a user-defined literal operator and
+    fails to compile). A decimal point has to be forced in.
+    """
+    s = f"{float(v):.8g}"
+    if not any(ch in s for ch in ".eEnia"):  # no point/exponent/inf/nan
+        s += ".0"
+    return s + "f"
+
+
 def c_array(name: str, arr: np.ndarray) -> str:
     """Render a numpy array as a flat, row-major C initializer."""
     arr = np.asarray(arr, dtype=np.float32)
-    flat = ", ".join(f"{v:.8g}f" for v in arr.flatten())
+    flat = ", ".join(cf(v) for v in arr.flatten())
     dims = "".join(f"[{d}]" for d in arr.shape) if arr.ndim > 0 else ""
     return f"static const float {name}{dims} = {{{flat}}};"
 
@@ -139,16 +153,38 @@ def main() -> int:
     Xs_train = scaler.transform(X_train)
     Xs_test = scaler.transform(X_test)
 
-    clf = MLPClassifier(
-        hidden_layer_sizes=(args.hidden,),
-        activation="relu",
-        solver="adam",
-        alpha=1e-3,           # L2 regularisation -- 900 rows is not much data
-        max_iter=3000,
-        random_state=args.seed,
-        early_stopping=True,
-        n_iter_no_change=25,
-    )
+    def make_mlp(hidden: int) -> MLPClassifier:
+        return MLPClassifier(
+            hidden_layer_sizes=(hidden,),
+            activation="relu",
+            solver="adam",
+            alpha=1e-3,       # L2 regularisation -- 900 rows is not much data
+            max_iter=3000,
+            random_state=args.seed,
+            early_stopping=True,
+            n_iter_no_change=25,
+        )
+
+    # Pick the hidden width by cross-validation on the TRAINING SET ONLY.
+    # Selecting it by held-out accuracy would leak the test split into a
+    # hyperparameter choice and inflate the number reported below -- the exact
+    # kind of quiet self-deception AUDIT.md flags elsewhere in this project.
+    if args.hidden <= 0:
+        from sklearn.model_selection import cross_val_score
+        candidates = [8, 12, 16, 24, 32]
+        cv_means = {}
+        for h in candidates:
+            cv_means[h] = float(cross_val_score(
+                make_mlp(h), Xs_train, y_train, cv=5).mean())
+        hidden = max(cv_means, key=lambda k: cv_means[k])
+        print("hidden-width CV sweep (on train split only):")
+        for h in candidates:
+            mark = "  <- chosen" if h == hidden else ""
+            print(f"    hidden={h:3d}   cv={cv_means[h]*100:.1f}%{mark}")
+    else:
+        hidden = args.hidden
+
+    clf = make_mlp(hidden)
     clf.fit(Xs_train, y_train)
 
     held_out_acc = clf.score(Xs_test, y_test)
@@ -168,7 +204,7 @@ def main() -> int:
     scaler_final = StandardScaler().fit(X)
     Xs_final = scaler_final.transform(X)
     clf_final = MLPClassifier(
-        hidden_layer_sizes=(args.hidden,), activation="relu", solver="adam",
+        hidden_layer_sizes=(hidden,), activation="relu", solver="adam",
         alpha=1e-3, max_iter=3000, random_state=args.seed,
         early_stopping=True, n_iter_no_change=25,
     )
@@ -190,13 +226,13 @@ def main() -> int:
 // AUDIT.md and dataset_generator.py. The deployed model below is refit on
 // 100% of the data after that honest number was recorded.
 //
-// Architecture: {len(FEATURE_COLUMNS)} -> {args.hidden} (ReLU) -> {len(class_order)} (softmax)
+// Architecture: {len(FEATURE_COLUMNS)} -> {hidden} (ReLU) -> {len(class_order)} (softmax)
 // Float32, NOT quantized -- see train_classifier.py module docstring for why.
 
 #pragma once
 
 static const int MODEL_N_FEATURES = {len(FEATURE_COLUMNS)};
-static const int MODEL_N_HIDDEN = {args.hidden};
+static const int MODEL_N_HIDDEN = {hidden};
 static const int MODEL_N_CLASSES = {len(class_order)};
 
 // Feature order the model expects -- MUST match FEATURE_COLUMNS in
@@ -245,11 +281,11 @@ static const char* const MODEL_CLASS_NAMES[{len(class_order)}] = {{
         f"static const float TEST_INPUTS[{len(idx)}][{len(FEATURE_COLUMNS)}] = {{",
     ]
     for i in idx:
-        lines.append("  {" + ", ".join(f"{v:.8g}f" for v in X_test[i]) + "},")
+        lines.append("  {" + ", ".join(cf(v) for v in X_test[i]) + "},")
     lines.append("};")
     lines.append(f"static const float TEST_EXPECTED_PROBA[{len(idx)}][{len(class_order)}] = {{")
     for row in proba:
-        lines.append("  {" + ", ".join(f"{v:.8g}f" for v in row) + "},")
+        lines.append("  {" + ", ".join(cf(v) for v in row) + "},")
     lines.append("};")
     vec_path.write_text("\n".join(lines) + "\n")
     print(f"wrote {vec_path}  ({len(idx)} cross-check vectors)")
@@ -258,7 +294,7 @@ static const char* const MODEL_CLASS_NAMES[{len(class_order)}] = {{
     meta.write_text(json.dumps({
         "generated": _dt.datetime.now().isoformat(),
         "n_rows": n,
-        "hidden_units": args.hidden,
+        "hidden_units": hidden,
         "held_out_accuracy": round(float(held_out_acc), 4),
         "train_accuracy": round(float(train_acc), 4),
         "class_order": class_order,
