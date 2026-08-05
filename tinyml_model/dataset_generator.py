@@ -50,168 +50,20 @@ import sys
 
 import numpy as np
 
-# ----------------------------------------------------------------- constants
-EPS_CEMENT = 4.5
-EPS_AGGREGATE = 5.5
-EPS_AIR = 1.0
-
-RHO_WATER = 1000.0
-RHO_CEMENT = 3150.0
-RHO_CONCRETE = 2400.0
-
-V_CEMENT = 0.13
-V_AGGREGATE = 0.65
-
-PRANDTL_NC = 2.0 + math.pi  # ~5.14
-
-# Board anchors. These are the *simulated* board's response; a real deployment
-# overwrites them from tools/calibrate.py. Kept explicit so the synthetic ADC
-# span matches the hardware the model will actually run on.
-MV_DRY = 2900.0
-MV_SAT = 1300.0
-
-PLUNGER_AREA_M2 = math.pi * (0.005 ** 2)  # 10mm diameter flat punch
-
-CLASSES = ["GOOD", "MARGINAL", "REJECT"]
-
-
 # ----------------------------------------------------------------- physics
-def water_permittivity(temp_c: np.ndarray) -> np.ndarray:
-    """Malmberg & Maryott (1956), J. Res. NBS 56(1):1-8. Valid 0-100 degC."""
-    t = np.clip(temp_c, 0.0, 100.0)
-    return 87.740 - 0.40008 * t + 9.398e-4 * t**2 - 1.410e-6 * t**3
-
-
-def wc_to_water_volume_fraction(wc: np.ndarray) -> np.ndarray:
-    """w/c by mass -> water volume fraction, at fixed cement content."""
-    return (wc * V_CEMENT * RHO_CEMENT) / RHO_WATER
-
-
-def lichtenecker_eps_mix(v_water: np.ndarray, temp_c: np.ndarray) -> np.ndarray:
-    """ln(eps_mix) = sum_i v_i ln(eps_i).  ln(eps_air)=0 so air drops out."""
-    v_air = np.clip(1.0 - v_water - V_CEMENT - V_AGGREGATE, 0.0, 0.10)
-    ln_eps = (
-        v_water * np.log(water_permittivity(temp_c))
-        + V_CEMENT * math.log(EPS_CEMENT)
-        + V_AGGREGATE * math.log(EPS_AGGREGATE)
-        + v_air * math.log(EPS_AIR)
-    )
-    return np.exp(ln_eps)
-
-
-def eps_mix_to_millivolts(eps_mix, temp_c, rng) -> np.ndarray:
-    """
-    Forward model of the capacitive v1.2 sensor.
-
-    Inverts the firmware's log-space interpolation, then adds the distortions a
-    real board shows. These are what make the task non-trivial: without them the
-    mapping is bijective and any model recovers w/c exactly.
-    """
-    ln_dry = math.log(EPS_AIR + 2.0)
-    ln_sat = np.log(water_permittivity(temp_c))
-    theta = (np.log(eps_mix) - ln_dry) / (ln_sat - ln_dry)
-    theta = np.clip(theta, 0.0, 1.0)
-
-    mv = MV_DRY - theta * (MV_DRY - MV_SAT)
-
-    # 1. Ionic conduction. Fresh pore solution is loaded with Ca2+/OH-, and at
-    #    the v1.2 board's ~1.5MHz excitation that conduction still leaks into
-    #    the reading, biasing it wet. This is the single largest physical error
-    #    source and the reason the docs' insulated-probe note matters.
-    ionic_bias = rng.normal(0.0, 45.0, size=mv.shape)
-
-    # 2. Residual temperature drift of the 555 oscillator, beyond what the
-    #    eps_w(T) compensation already removes.
-    temp_drift = -2.2 * (temp_c - 25.0)
-
-    # 3. ESP32 ADC noise after 64x averaging, plus quantisation at 12 bits.
-    adc_noise = rng.normal(0.0, 6.0, size=mv.shape)
-
-    mv = mv + ionic_bias + temp_drift + adc_noise
-    mv = np.round(np.clip(mv, 0.0, 3300.0) / 3300.0 * 4095.0) / 4095.0 * 3300.0
-    return mv
-
-
-def slump_to_yield_stress(slump_mm: np.ndarray) -> np.ndarray:
-    """Hu & de Larrard, via Ferraris & de Larrard (1998): tau0 = rho/270*(300-s)."""
-    return np.maximum(RHO_CONCRETE / 270.0 * (300.0 - slump_mm), 1.0)
-
-
-def yield_stress_to_force_n(tau0: np.ndarray, rng) -> np.ndarray:
-    """
-    Prandtl flat-punch: q_ult = (2+pi)*tau_0, so F = tau_0 * Nc * A.
-
-    Coarse aggregate is the dominant nuisance: a 20mm stone under a 10mm punch
-    reads the stone, not the mix. That shows up as rare large positive outliers,
-    modelled here as a heavy right tail rather than symmetric noise -- getting
-    this shape wrong would make the classifier over-trust the load channel.
-    """
-    f = tau0 * PRANDTL_NC * PLUNGER_AREA_M2
-    f = f * rng.normal(1.0, 0.08, size=f.shape)                    # mix scatter
-    strike = rng.random(f.shape) < 0.07                            # stone strike
-    f = np.where(strike, f * rng.uniform(1.4, 2.6, size=f.shape), f)
-    f = f + rng.normal(0.0, 0.05, size=f.shape)                    # HX711 noise
-    return np.maximum(f, 0.01)
-
-
-def vibration_signature(wc, slump_mm, rng, n):
-    """
-    Vibration features vs mix state.
-
-    Physical reasoning: a well-proportioned mix fluidises uniformly and damps
-    the excitation smoothly. A wet, segregating mix damps more but its spectrum
-    broadens as bleed water and settling aggregate decouple. A stiff mix
-    transmits more energy and rings at higher frequency.
-
-    Stated plainly: this is the weakest-grounded channel in the project. The
-    trend directions are defensible; the coefficients are chosen to be
-    plausible, not fitted. It is included because the docs specify it, and it is
-    flagged here so nobody reports it as validated.
-    """
-    wetness = np.clip((wc - 0.35) / 0.25, 0.0, 1.5)
-    stiffness = np.clip((150.0 - slump_mm) / 150.0, 0.0, 1.2)
-
-    rms = 0.28 + 0.30 * stiffness - 0.10 * wetness + rng.normal(0, 0.035, n)
-    rms = np.clip(rms, 0.02, 1.5)
-
-    dom = 34.0 + 14.0 * stiffness - 6.0 * wetness + rng.normal(0, 2.4, n)
-    dom = np.clip(dom, 5.0, 44.0)  # DLPF corner is 44Hz; nothing survives above
-
-    entropy = 0.42 + 0.26 * wetness - 0.10 * stiffness + rng.normal(0, 0.05, n)
-    entropy = np.clip(entropy, 0.05, 0.99)
-
-    damping = 0.055 + 0.070 * wetness - 0.020 * stiffness + rng.normal(0, 0.012, n)
-    damping = np.clip(damping, 0.005, 0.45)
-
-    return rms, dom, entropy, damping
-
-
-# ----------------------------------------------------------------- labelling
-def classify_is456(wc, slump_mm, temp_c) -> np.ndarray:
-    """
-    IS 456:2000 rule engine. Mirrors classifyIS456() in the firmware exactly.
-
-    Two gaps in the thresholds as written in the project docs are closed here,
-    conservatively, and the firmware closes them identically:
-      - w/c in [0.35, 0.40) belonged to no class
-      - slump < 50mm belonged to no class
-    Both are genuine workability defects and must not fall through to GOOD.
-    """
-    out = np.full(wc.shape, "GOOD", dtype=object)
-
-    marginal = (
-        ((wc >= 0.50) & (wc <= 0.55))
-        | ((wc >= 0.35) & (wc < 0.40))
-        | ((slump_mm > 125.0) & (slump_mm <= 150.0))
-        | (slump_mm < 50.0)
-        | ((temp_c >= 35.0) & (temp_c <= 40.0))
-    )
-    out[marginal] = "MARGINAL"
-
-    reject = (wc > 0.55) | (wc < 0.35) | (slump_mm > 150.0) | (temp_c > 40.0)
-    out[reject] = "REJECT"
-    return out
-
+# All physics, sensor forward models and the IS 456 rule engine live in the
+# shared module so this generator and simulation/concresense_sim.py cannot drift
+# apart. Each relation is cited at its definition there.
+from concresense_physics import (  # noqa: E402
+    CLASSES,
+    classify_is456,
+    eps_mix_to_millivolts,
+    lichtenecker_eps_mix,
+    slump_to_yield_stress,
+    vibration_signature,
+    wc_to_water_volume_fraction,
+    yield_stress_to_force_n,
+)
 
 # ----------------------------------------------------------------- generation
 def _sample_pool(size: int, rng):

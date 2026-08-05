@@ -32,6 +32,28 @@ GpsNeo6M gps;
 MoistureAnchors moistureAnchors;
 LoadCellAnchors loadAnchors;
 
+// ---------------------------------------------------------------------------
+// Wokwi simulator add-on: verdict LEDs (optional, small, harmless on real HW)
+//
+// Not part of the verified hardware design in config.h/PROJECT_ANALYSIS.md.
+// Added only so the wokwi/ simulation has a visible pass/fail readout without
+// needing the OLED text to be legible in a screenshot. Three plain GPIO
+// outputs, no PWM, no change to any sensor/physics/classification logic.
+// Wired in wokwi/diagram.json to D25 (green), D26 (yellow), D27 (red) via
+// 220-ohm series resistors. Safe to leave unwired on the real board.
+#define PIN_LED_GOOD 25
+#define PIN_LED_MARGINAL 26
+#define PIN_LED_REJECT 27
+
+static void updateVerdictLeds(QualityClass q) {
+  digitalWrite(PIN_LED_GOOD, q == QualityClass::GOOD ? HIGH : LOW);
+  digitalWrite(PIN_LED_MARGINAL, q == QualityClass::MARGINAL ? HIGH : LOW);
+  digitalWrite(PIN_LED_REJECT, q == QualityClass::REJECT ? HIGH : LOW);
+  // UNKNOWN (not yet calibrated / incomplete reading): all three off, rather
+  // than guessing a verdict LED for it.
+}
+// ---------------------------------------------------------- end Wokwi add-on
+
 // Burst buffer, static so a measurement never allocates mid-cycle.
 static float gBurst[IMU_BURST_SAMPLES];
 
@@ -145,6 +167,7 @@ static void runMeasurementCycle(bool csv) {
   if (d.wcValid && d.slumpValid) {
     q = classifyIS456(d.wcRatio, d.slumpMm, tempC);
   }
+  updateVerdictLeds(q);  // Wokwi add-on, see definition above
 
   if (csv) {
     // Matches FEATURE_COLUMNS in tinyml_model/dataset_generator.py so real
@@ -368,6 +391,15 @@ void setup() {
   banner();
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQ_HZ);
+
+  // Wokwi add-on: verdict LEDs, see definition above. All off until the
+  // first measurement cycle.
+  pinMode(PIN_LED_GOOD, OUTPUT);
+  pinMode(PIN_LED_MARGINAL, OUTPUT);
+  pinMode(PIN_LED_REJECT, OUTPUT);
+  digitalWrite(PIN_LED_GOOD, LOW);
+  digitalWrite(PIN_LED_MARGINAL, LOW);
+  digitalWrite(PIN_LED_REJECT, LOW);
 
   // Restore per-board calibration before any driver runs, so the bring-up
   // report can state whether this board is calibrated.

@@ -75,3 +75,9 @@ Thumbs.db
 *~
 *.bak
 .serena/
+
+# Simulation outputs (generated media / artifacts)
+simulation/out/
+*.mp4
+*.avi
+*.mov

@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "author": "ConcreSense project",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "id": "esp",
+      "type": "wokwi-esp32-devkit-v1",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "id": "oled1",
+      "type": "wokwi-ssd1306",
+      "top": -170,
+      "left": -60,
+      "attrs": { "i2cAddress": "0x3c" }
+    },
+    {
+      "id": "imu1",
+      "type": "wokwi-mpu6050",
+      "top": -170,
+      "left": 220,
+      "attrs": {}
+    },
+    {
+      "id": "ds1",
+      "type": "wokwi-ds18b20",
+      "top": 60,
+      "left": -230,
+      "attrs": { "temperature": "22" }
+    },
+    {
+      "id": "r_pullup",
+      "type": "wokwi-resistor",
+      "top": 30,
+      "left": -300,
+      "rotate": 90,
+      "attrs": { "value": "4700" }
+    },
+    {
+      "id": "hx711_1",
+      "type": "wokwi-hx711",
+      "top": 120,
+      "left": 260,
+      "attrs": { "type": "5kg" }
+    },
+    {
+      "id": "pot_moisture",
+      "type": "wokwi-slide-potentiometer",
+      "top": 260,
+      "left": -80,
+      "attrs": { "value": "512", "travelLength": "30" }
+    },
+    {
+      "id": "pot_load",
+      "type": "wokwi-slide-potentiometer",
+      "top": 260,
+      "left": 260,
+      "attrs": { "value": "0", "travelLength": "30" }
+    },
+    {
+      "id": "led_good",
+      "type": "wokwi-led",
+      "top": -60,
+      "left": 420,
+      "attrs": { "color": "green", "label": "GOOD" }
+    },
+    {
+      "id": "r_led_good",
+      "type": "wokwi-resistor",
+      "top": -60,
+      "left": 380,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "id": "led_marginal",
+      "type": "wokwi-led",
+      "top": 0,
+      "left": 420,
+      "attrs": { "color": "yellow", "label": "MARGINAL" }
+    },
+    {
+      "id": "r_led_marginal",
+      "type": "wokwi-resistor",
+      "top": 0,
+      "left": 380,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "id": "led_reject",
+      "type": "wokwi-led",
+      "top": 60,
+      "left": 420,
+      "attrs": { "color": "red", "label": "REJECT" }
+    },
+    {
+      "id": "r_led_reject",
+      "type": "wokwi-resistor",
+      "top": 60,
+      "left": 380,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    }
+  ],
+  "connections": [
+    "// --- I2C bus (GPIO21=SDA, GPIO22=SCL) shared by OLED + MPU-6050 ---",
+    ["esp:D21", "oled1:DATA", "green", []],
+    ["esp:D21", "imu1:SDA", "green", []],
+    ["esp:D22", "oled1:CLK", "yellow", []],
+    ["esp:D22", "imu1:SCL", "yellow", []],
+    ["oled1:VIN", "esp:3V3", "red", []],
+    ["oled1:GND", "esp:GND.1", "black", []],
+    ["imu1:VCC", "esp:3V3", "red", []],
+    ["imu1:GND", "esp:GND.1", "black", []],
+
+    "// --- DS18B20 on GPIO4, OneWire, with 4.7k pull-up to 3V3 ---",
+    ["esp:D4", "ds1:DQ", "blue", []],
+    ["r_pullup:1", "ds1:DQ", "blue", []],
+    ["r_pullup:2", "esp:3V3", "red", []],
+    ["ds1:VCC", "esp:3V3", "red", []],
+    ["ds1:GND", "esp:GND.1", "black", []],
+
+    "// --- HX711 load cell amp on GPIO18 (DOUT/DT) / GPIO19 (SCK). ---",
+    "// --- E+/E-/A+/A- are cosmetic-only in Wokwi (not wired). See README. ---",
+    ["esp:D18", "hx711_1:DT", "blue", []],
+    ["esp:D19", "hx711_1:SCK", "orange", []],
+    ["hx711_1:VCC", "esp:VIN", "red", []],
+    ["hx711_1:GND", "esp:GND.2", "black", []],
+
+    "// --- Moisture stand-in: slide pot wired to GPIO34 (ADC1), read by firmware ---",
+    ["pot_moisture:SIG", "esp:D34", "blue", []],
+    ["pot_moisture:VCC", "esp:3V3", "red", []],
+    ["pot_moisture:GND", "esp:GND.2", "black", []],
+
+    "// --- Load stand-in: slide pot wired to spare ADC GPIO35 -- NOT read by ---",
+    "// --- firmware (real load path is the HX711 above). Manual demo dial only. ---",
+    ["pot_load:SIG", "esp:D35", "blue", []],
+    ["pot_load:VCC", "esp:3V3", "red", []],
+    ["pot_load:GND", "esp:GND.2", "black", []],
+
+    "// --- Optional verdict LEDs (GPIO25/26/27), added in concresense.ino ---",
+    ["esp:D25", "r_led_good:1", "green", []],
+    ["r_led_good:2", "led_good:A", "green", []],
+    ["led_good:C", "esp:GND.2", "black", []],
+    ["esp:D26", "r_led_marginal:1", "yellow", []],
+    ["r_led_marginal:2", "led_marginal:A", "yellow", []],
+    ["led_marginal:C", "esp:GND.2", "black", []],
+    ["esp:D27", "r_led_reject:1", "red", []],
+    ["r_led_reject:2", "led_reject:A", "red", []],
+    ["led_reject:C", "esp:GND.2", "black", []]
+  ]
+}

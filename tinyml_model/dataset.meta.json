@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-04T23:29:30.220999",
+  "generated": "2026-08-05T10:24:18.430575",
   "n_synthetic": 900,
   "n_real": 0,
   "seed": 42,
@@ -9,16 +9,16 @@
     "REJECT": 300
   },
   "synthetic_separability_cv": {
-    "cv_mean": 0.7544444444444445,
-    "cv_std": 0.02000000000000001,
+    "cv_mean": 0.7655555555555555,
+    "cv_std": 0.04058218303944372,
     "importances": {
-      "penetration_force_n": 0.2036,
-      "vib_damping_ratio": 0.1521,
-      "vib_spectral_entropy": 0.145,
-      "vib_rms_g": 0.1449,
-      "moisture_mv": 0.1336,
-      "temperature_c": 0.1287,
-      "vib_dominant_hz": 0.092
+      "penetration_force_n": 0.2523,
+      "vib_damping_ratio": 0.1581,
+      "vib_rms_g": 0.1342,
+      "vib_spectral_entropy": 0.1267,
+      "moisture_mv": 0.1256,
+      "temperature_c": 0.1166,
+      "vib_dominant_hz": 0.0865
     }
   },
   "validated_against_real_concrete": false,
