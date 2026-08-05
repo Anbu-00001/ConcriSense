@@ -1,0 +1,24 @@
+# Wokwi for VS Code / Antigravity project configuration.
+#
+# Paths below are resolved relative to THIS file's directory (wokwi/), per
+# the extension's ConfigService (it joins firmware/elf paths against the
+# directory containing wokwi.toml, not the workspace root).
+#
+# This project builds with arduino-cli, not PlatformIO or ESP-IDF, so there
+# is no flasher_args.json. Instead we point `firmware` at the ".merged.bin"
+# that `arduino-cli compile --export-binaries` produces: it already contains
+# the bootloader + partition table + app image pre-merged at their correct
+# flash offsets, so Wokwi can load it directly without guessing an offset.
+# `elf` is optional but enables symbol-accurate GDB debugging and nicer
+# crash backtraces in the simulator.
+#
+# Regenerate both files after any firmware change with:
+#   arduino-cli compile --fqbn esp32:esp32:esp32 --export-binaries firmware/concresense
+#
+# (Wokwi also auto-reloads the simulation when these files change on disk,
+# so a rebuild + running simulation will pick it up without a manual restart.)
+
+[wokwi]
+version = 1
+firmware = "../firmware/concresense/build/esp32.esp32.esp32/concresense.ino.merged.bin"
+elf = "../firmware/concresense/build/esp32.esp32.esp32/concresense.ino.elf"

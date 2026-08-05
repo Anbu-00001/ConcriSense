@@ -102,6 +102,7 @@ static void scanI2C() {
 static void banner() {
   Serial.println(F("\n\n=============================================="));
   Serial.println(F("  ConcreSense - Phase 1 Hardware Bring-up"));
+  Serial.println(F("  Anbuchelvan | CSE A | 24CS0059"));
   Serial.printf("  fw %s   device %s\n", FW_VERSION, DEVICE_ID);
   Serial.printf("  chip %s rev %d   %d MHz   %d core(s)\n",
                 ESP.getChipModel(), ESP.getChipRevision(),
@@ -413,7 +414,16 @@ void setup() {
   Serial.println(statusName(s));
   record("SSD1306 OLED", s, s == SensorStatus::OK ? "0x3C, 128x64"
                                                   : "not on bus");
-  if (s == SensorStatus::OK) oled.splash(FW_VERSION);
+  if (s == SensorStatus::OK) {
+    oled.splash(FW_VERSION);
+    delay(800);
+    // Coursework add-on: brief student-identity screen, shown once at boot
+    // before the bring-up report. Uses the existing showStatusGrid() API
+    // only -- no changes to the display driver itself.
+    const char* idLines[] = {"Anbuchelvan", "CSE A", "24CS0059"};
+    oled.showStatusGrid(idLines, 3);
+    delay(1500);
+  }
 
   // --- Capacitive moisture on ADC1
   Serial.print(F("[2/6] Moisture (cap v1.2)... "));

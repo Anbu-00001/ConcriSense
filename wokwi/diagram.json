@@ -107,7 +107,6 @@
     }
   ],
   "connections": [
-    "// --- I2C bus (GPIO21=SDA, GPIO22=SCL) shared by OLED + MPU-6050 ---",
     ["esp:D21", "oled1:DATA", "green", []],
     ["esp:D21", "imu1:SDA", "green", []],
     ["esp:D22", "oled1:CLK", "yellow", []],
@@ -117,32 +116,25 @@
     ["imu1:VCC", "esp:3V3", "red", []],
     ["imu1:GND", "esp:GND.1", "black", []],
 
-    "// --- DS18B20 on GPIO4, OneWire, with 4.7k pull-up to 3V3 ---",
     ["esp:D4", "ds1:DQ", "blue", []],
     ["r_pullup:1", "ds1:DQ", "blue", []],
     ["r_pullup:2", "esp:3V3", "red", []],
     ["ds1:VCC", "esp:3V3", "red", []],
     ["ds1:GND", "esp:GND.1", "black", []],
 
-    "// --- HX711 load cell amp on GPIO18 (DOUT/DT) / GPIO19 (SCK). ---",
-    "// --- E+/E-/A+/A- are cosmetic-only in Wokwi (not wired). See README. ---",
     ["esp:D18", "hx711_1:DT", "blue", []],
     ["esp:D19", "hx711_1:SCK", "orange", []],
     ["hx711_1:VCC", "esp:VIN", "red", []],
     ["hx711_1:GND", "esp:GND.2", "black", []],
 
-    "// --- Moisture stand-in: slide pot wired to GPIO34 (ADC1), read by firmware ---",
     ["pot_moisture:SIG", "esp:D34", "blue", []],
     ["pot_moisture:VCC", "esp:3V3", "red", []],
     ["pot_moisture:GND", "esp:GND.2", "black", []],
 
-    "// --- Load stand-in: slide pot wired to spare ADC GPIO35 -- NOT read by ---",
-    "// --- firmware (real load path is the HX711 above). Manual demo dial only. ---",
     ["pot_load:SIG", "esp:D35", "blue", []],
     ["pot_load:VCC", "esp:3V3", "red", []],
     ["pot_load:GND", "esp:GND.2", "black", []],
 
-    "// --- Optional verdict LEDs (GPIO25/26/27), added in concresense.ino ---",
     ["esp:D25", "r_led_good:1", "green", []],
     ["r_led_good:2", "led_good:A", "green", []],
     ["led_good:C", "esp:GND.2", "black", []],
