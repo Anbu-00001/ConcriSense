@@ -26,6 +26,16 @@ const express = require('express');
 const mqtt = require('mqtt');
 const { WebSocketServer } = require('ws');
 
+const { generateReport } = require('./pdf_report');
+
+// Report identity. Overridable by env so this is not hardcoded to one student
+// when someone else runs the project.
+const REPORT_META = {
+  student: process.env.REPORT_STUDENT || 'Anbuchelvan',
+  section: process.env.REPORT_SECTION || 'CSE A',
+  roll: process.env.REPORT_ROLL || '24CS0059',
+};
+
 // ----------------------------------------------------------------- config
 const args = process.argv.slice(2);
 const useEmbeddedBroker = !args.includes('--no-broker');
@@ -175,6 +185,31 @@ app.get('/api/summary', (req, res) => {
     // disagree, the model is adding nothing over the rule engine.
     model_rule_disagreements: disagreements,
   });
+});
+
+// One-click IS 456:2000 site audit PDF.
+//
+// Streamed straight to the response rather than buffered: a long test history
+// would otherwise sit in memory twice, and streaming means the download starts
+// immediately.
+app.get('/api/report.pdf', (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || MAX_HISTORY, MAX_HISTORY);
+  const records = history.slice(-limit);
+
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+                `attachment; filename="concresense-audit-${stamp}.pdf"`);
+
+  try {
+    generateReport({ records, meta: REPORT_META }, res);
+  } catch (e) {
+    console.error('[pdf] generation failed:', e.message);
+    // Headers may already be sent once PDFKit starts streaming, so only send a
+    // status if the response is still clean.
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+    else res.end();
+  }
 });
 
 server.listen(HTTP_PORT, () => {

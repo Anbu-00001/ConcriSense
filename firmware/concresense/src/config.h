@@ -16,8 +16,15 @@
 
 // ---------------------------------------------------------------- identity
 #define DEVICE_ID "CONCRESENSE_ESP32_001"
-#define FW_VERSION "0.1.0-phase1"
+#define FW_VERSION "0.5.0-phase5"
 #define COMPLIANCE_STANDARD "IS 456:2000"
+
+// Submission identity. Kept here rather than inline in the sketch so it appears
+// in exactly one place -- it is printed on the serial banner and the OLED
+// splash, and duplicating string literals across both is how they drift apart.
+#define STUDENT_NAME "Anbuchelvan"
+#define STUDENT_SECTION "CSE A"
+#define STUDENT_ROLL "24CS0059"
 
 // ------------------------------------------------------------------- pins
 // I2C bus 0 — shared by SSD1306 OLED and MPU-6050 (distinct addresses)

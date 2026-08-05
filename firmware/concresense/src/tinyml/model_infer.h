@@ -12,10 +12,16 @@
 // activation would still compile and still produce confident-looking numbers,
 // so "it builds" is not evidence it is correct.
 
+// Class count, declared here so consumers (net_client, the sketch) do not need
+// to pull in the whole weights header just to size a loop. model_infer.cpp
+// static_asserts this against MODEL_N_CLASSES, so a retrain that changes the
+// number of classes fails the BUILD rather than silently truncating output.
+#define INFERENCE_N_CLASSES 3
+
 struct Inference {
   int classIndex = -1;
-  float confidence = 0.0f;               // max softmax probability
-  float probabilities[3] = {0, 0, 0};    // indexed by MODEL_CLASS_NAMES order
+  float confidence = 0.0f;                            // max softmax probability
+  float probabilities[INFERENCE_N_CLASSES] = {0, 0, 0};  // MODEL_CLASS_NAMES order
   bool valid = false;
 };
 

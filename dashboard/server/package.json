@@ -11,7 +11,9 @@
   "dependencies": {
     "aedes": "^0.51.3",
     "express": "^4.21.2",
+    "leaflet": "^1.9.4",
     "mqtt": "^5.10.4",
+    "pdfkit": "^0.19.1",
     "ws": "^8.18.0"
   }
 }

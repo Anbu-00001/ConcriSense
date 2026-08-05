@@ -2,6 +2,12 @@
 
 #include "model_weights.h"
 
+// If a retrain changes the class count, this fails the build instead of
+// silently truncating probabilities[] everywhere downstream.
+static_assert(INFERENCE_N_CLASSES == MODEL_N_CLASSES,
+              "INFERENCE_N_CLASSES in model_infer.h is out of sync with the "
+              "trained model in model_weights.h -- regenerate and update it.");
+
 const char* inferenceClassName(int classIndex) {
   if (classIndex < 0 || classIndex >= MODEL_N_CLASSES) return "UNKNOWN";
   return MODEL_CLASS_NAMES[classIndex];

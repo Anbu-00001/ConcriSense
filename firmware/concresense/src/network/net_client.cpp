@@ -234,7 +234,7 @@ bool publish(const MeasurementRecord& rec, const Inference& inf,
     cls["model_result"] = inferenceClassName(inf.classIndex);
     cls["confidence"] = inf.confidence;
     JsonObject probs = cls["class_probabilities"].to<JsonObject>();
-    for (int c = 0; c < 3; c++) {
+    for (int c = 0; c < INFERENCE_N_CLASSES; c++) {
       probs[inferenceClassName(c)] = inf.probabilities[c];
     }
   } else {
@@ -250,7 +250,10 @@ bool publish(const MeasurementRecord& rec, const Inference& inf,
 
   doc["standard_compliance"] = COMPLIANCE_STANDARD;
   doc["firmware"] = FW_VERSION;
-  doc["data_source"] = "device_measurement";
+  // Provenance follows the record all the way to the dashboard and the audit
+  // PDF. A simulated reading must never be indistinguishable from a measured
+  // one once it has left the device.
+  doc["data_source"] = rec.simulated ? "simulated_onboard" : "device_measurement";
 
   char topic[96];
   snprintf(topic, sizeof(topic), "concresense/site/%s/test", DEVICE_ID);

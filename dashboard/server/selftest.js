@@ -35,9 +35,14 @@ function samplePayload(seq) {
     timestamp_utc: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
     time_source: 'ntp',
     location: { fix: false, reason: 'no_gps_fix' },
+    // Kept INTERNALLY CONSISTENT with rule_result: 'GOOD' below.
+    // w/c 0.462 (in 0.40-0.50), slump 88.4mm (in 50-125), temp 29.5C (< 35).
+    // An earlier version used 37.44 C, which IS 456 puts in the MARGINAL band
+    // (35-40) -- the transport test still passed, but it generated a demo PDF
+    // that contradicted itself, which is worse than a failing test.
     sensor_raw: {
       moisture_mv: 2408.7,
-      temperature_c: 37.44,
+      temperature_c: 29.5,
       load_counts: 15230,
       vibration_rms_g: 0.27587,
     },

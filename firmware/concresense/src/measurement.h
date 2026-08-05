@@ -16,6 +16,13 @@ struct MeasurementRecord {
   uint32_t seq = 0;
   uint32_t uptimeMs = 0;
 
+  // True when the sensor values were synthesised on-device rather than read
+  // from hardware (the 'sim' console command). Travels all the way into the
+  // published MQTT payload as data_source=simulated_onboard, so a simulated
+  // reading can never be mistaken for a measured one downstream -- in the
+  // dashboard, in the history, or in the audit PDF.
+  bool simulated = false;
+
   // raw / measured
   float moistureMv = NAN;
   float tempC = NAN;

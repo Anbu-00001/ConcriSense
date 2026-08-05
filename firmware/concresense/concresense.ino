@@ -135,7 +135,8 @@ static void scanI2C() {
 static void banner() {
   Serial.println(F("\n\n=============================================="));
   Serial.println(F("  ConcreSense - Phase 1 Hardware Bring-up"));
-  Serial.println(F("  Anbuchelvan | CSE A | 24CS0059"));
+  Serial.printf("  %s | %s | %s\n", STUDENT_NAME, STUDENT_SECTION,
+                STUDENT_ROLL);
   Serial.printf("  fw %s   device %s\n", FW_VERSION, DEVICE_ID);
   Serial.printf("  chip %s rev %d   %d MHz   %d core(s)\n",
                 ESP.getChipModel(), ESP.getChipRevision(),
@@ -307,6 +308,27 @@ static void reportMeasurement(const MeasurementRecord& rec,
       Serial.println(F("  ** MODEL AND RULES DISAGREE - rules take precedence"));
       Serial.println(F("     for compliance; the disagreement is published."));
     }
+    // Out-of-distribution check. A softmax score says nothing about whether
+    // the input resembles the training data -- a classifier will report 95%
+    // confidence on a feature vector it has never seen anything like. Flagging
+    // |z| > 3 makes that failure visible instead of silent.
+    float feats[MODEL_N_FEATURES];
+    if (rec.toFeatureVector(feats)) {
+      float worstZ = 0.0f;
+      int worstIdx = -1;
+      for (int i = 0; i < MODEL_N_FEATURES; i++) {
+        if (MODEL_FEATURE_SCALE[i] <= 1e-12f) continue;
+        const float z =
+            fabsf((feats[i] - MODEL_FEATURE_MEAN[i]) / MODEL_FEATURE_SCALE[i]);
+        if (z > worstZ) { worstZ = z; worstIdx = i; }
+      }
+      if (worstZ > 3.0f) {
+        Serial.printf("  ** OUT OF DISTRIBUTION: feature %d is %.1f sigma from"
+                      " the training mean.\n", worstIdx, worstZ);
+        Serial.println(F("     The model's confidence above is not meaningful"
+                         " for this input."));
+      }
+    }
   } else {
     Serial.println(F("  TinyML model : UNKNOWN (incomplete feature vector)"));
     Serial.println(F("  (refusing to classify beats guessing from zeros)"));
@@ -336,9 +358,9 @@ static void processMeasurement(const MeasurementRecord& rec, bool csv) {
   }
 
   Inference inf;
-  float features[7];
+  float features[MODEL_N_FEATURES];
   if (rec.toFeatureVector(features)) {
-    inf = runInference(features, 7);
+    inf = runInference(features, MODEL_N_FEATURES);
   }
 
   updateVerdictLeds(ruleClass);
@@ -512,6 +534,171 @@ static void calibrateLoadCell() {
                 loadAnchors.countsPerNewton);
 }
 
+// ------------------------------------------------- Phase 5: simulation mode
+//
+// Synthesises a complete measurement so the ENTIRE downstream pipeline --
+// classification, OLED, MQTT publish, dashboard, audit PDF -- can be verified
+// on real silicon before any sensor exists. Without this, the device-to-broker
+// link would stay untested until the parts arrive.
+//
+// The values are NOT hardcoded sensor readings. A target physical state is
+// chosen, then the sensor reading that produces it is found by bisection
+// through the SAME deriveAll() the real path uses. That means the simulator
+// cannot drift from the physics, and a bug in the calibration chain shows up
+// here too instead of being papered over.
+//
+// Every simulated record is flagged and published as
+// data_source=simulated_onboard.
+
+// Anchors used only by the simulator. Never written to NVS, never touching the
+// real calibration -- a simulated run must not leave the device looking
+// calibrated when it is not.
+static MoistureAnchors simMoistureAnchors() {
+  MoistureAnchors a;   // defaults are the nominal v1.2 response
+  a.calibrated = true;
+  return a;
+}
+static LoadCellAnchors simLoadAnchors() {
+  LoadCellAnchors a;
+  a.countsPerNewton = 20000.0f;  // representative of a 5kg cell at gain 128
+  a.calibrated = true;
+  return a;
+}
+
+// Generic bisection: find the input in [lo,hi] whose derived output matches
+// `target`. `eval` must be monotonic over the interval.
+static float solveFor(float lo, float hi, float target,
+                      float (*eval)(float, float), float tempC) {
+  for (int i = 0; i < 40; i++) {
+    const float mid = 0.5f * (lo + hi);
+    const float v = eval(mid, tempC);
+    if (isnan(v)) return NAN;
+    // eval() is monotonically DECREASING in both uses here (higher mV -> drier;
+    // higher counts -> stiffer), so the branch is inverted versus the usual form.
+    if (v > target) lo = mid; else hi = mid;
+  }
+  return 0.5f * (lo + hi);
+}
+
+static float evalWc(float mv, float tempC) {
+  DerivedProperties d = deriveAll(mv, tempC, NAN, simMoistureAnchors(),
+                                  simLoadAnchors());
+  return d.wcRatio;
+}
+static float evalSlump(float counts, float tempC) {
+  DerivedProperties d = deriveAll(NAN, tempC, counts, simMoistureAnchors(),
+                                  simLoadAnchors());
+  return d.slumpMm;
+}
+
+static MeasurementRecord makeSimulatedMeasurement(uint8_t scenario) {
+  // Target physical states spanning the three IS 456 classes.
+  struct Target { const char* name; float wc, slump, tempC; };
+  static const Target targets[] = {
+      {"well-proportioned", 0.45f,  90.0f, 30.0f},
+      {"slightly wet",      0.52f, 135.0f, 33.0f},
+      {"excess water",      0.62f, 185.0f, 31.0f},
+  };
+  const Target& t = targets[scenario % 3];
+
+  static uint32_t simSeq = 0;
+  MeasurementRecord rec;
+  rec.simulated = true;
+  rec.seq = ++simSeq;
+  rec.uptimeMs = millis();
+
+  // Invert the physics to get the sensor readings that produce this state.
+  rec.moistureMv = solveFor(1300.0f, 2900.0f, t.wc, evalWc, t.tempC);
+  rec.loadCounts = solveFor(1.0f, 200000.0f, t.slump, evalSlump, t.tempC);
+  rec.tempC = t.tempC;
+  rec.moistureValid = !isnan(rec.moistureMv);
+  rec.tempValid = true;
+  rec.loadValid = !isnan(rec.loadCounts);
+
+  rec.derived = deriveAll(rec.moistureMv, rec.tempC, rec.loadCounts,
+                          simMoistureAnchors(), simLoadAnchors());
+
+  // Vibration: synthesise a damped waveform whose features land where the
+  // TRAINING distribution puts them, then run the REAL FFT over it so the
+  // features come from the same DSP the sensor path uses.
+  //
+  // Targets below mirror vibration_signature() in
+  // tinyml_model/concresense_physics.py. Matching that distribution is not
+  // cosmetic: an earlier version used an arbitrary fast decay and produced a
+  // damping ratio +4.6 SIGMA above the training mean. The model then predicted
+  // REJECT on every scenario with high confidence -- not a real disagreement,
+  // just a classifier being shown input unlike anything it was trained on.
+  const float wetness = constrain((t.wc - 0.35f) / 0.25f, 0.0f, 1.5f);
+  const float stiffness = constrain((150.0f - t.slump) / 150.0f, 0.0f, 1.2f);
+
+  const float targetRms = constrain(0.28f + 0.30f * stiffness - 0.10f * wetness,
+                                    0.02f, 1.5f);
+  const float domHz = constrain(34.0f + 14.0f * stiffness - 6.0f * wetness,
+                                5.0f, 44.0f);
+  const float targetEntropy = constrain(
+      0.42f + 0.26f * wetness - 0.10f * stiffness, 0.05f, 0.99f);
+  const float targetDamping = constrain(
+      0.055f + 0.070f * wetness - 0.020f * stiffness, 0.005f, 0.45f);
+
+  // Derive the decay constant from the target damping instead of guessing.
+  //   zeta = delta / sqrt(4pi^2 + delta^2)   =>  delta = 2*pi*zeta/sqrt(1-zeta^2)
+  // extractVibrationFeatures() computes delta = 0.5*ln(E_first/E_last) over
+  // quarter-windows whose energy centroids are ~T/8 and ~7T/8 apart, so for an
+  // exp(-t/tau) envelope:  delta = (3T/4)/tau  =>  tau = 0.75*T/delta.
+  const float windowT = (float)IMU_BURST_SAMPLES / IMU_SAMPLE_RATE_HZ;
+  const float zeta = targetDamping;
+  const float delta = 2.0f * PI * zeta / sqrtf(1.0f - zeta * zeta);
+  const float tau = (delta > 1e-6f) ? (0.75f * windowT / delta) : 1e6f;
+
+  for (uint16_t i = 0; i < IMU_BURST_SAMPLES; i++) {
+    const float tt = (float)i / IMU_SAMPLE_RATE_HZ;
+    const float decay = expf(-tt / tau);
+    // Noise fraction sets spectral entropy: a pure tone is ~0, broadband ~1.
+    const float noise = ((float)random(-1000, 1000) / 1000.0f) * targetEntropy;
+    // The 1g gravity pedestal is included on purpose -- real accel magnitude
+    // carries it, so the FFT's DC-removal path must be exercised here too.
+    gBurst[i] = 1.0f + (sinf(2.0f * PI * domHz * tt) * decay + noise);
+  }
+
+  // Rescale the AC component to hit the target RMS exactly. Done by measuring
+  // with the real extractor rather than predicting analytically, because the
+  // decay envelope and the noise term both contribute in ways that are fiddly
+  // to solve in closed form and easy to get subtly wrong.
+  VibrationFeatures probe = extractVibrationFeatures(gBurst, IMU_BURST_SAMPLES,
+                                                     IMU_SAMPLE_RATE_HZ);
+  if (probe.valid && probe.rms > 1e-6f) {
+    const float k = targetRms / probe.rms;
+    float mean = 0.0f;
+    for (uint16_t i = 0; i < IMU_BURST_SAMPLES; i++) mean += gBurst[i];
+    mean /= IMU_BURST_SAMPLES;
+    for (uint16_t i = 0; i < IMU_BURST_SAMPLES; i++) {
+      gBurst[i] = mean + (gBurst[i] - mean) * k;
+    }
+  }
+  rec.vib = extractVibrationFeatures(gBurst, IMU_BURST_SAMPLES,
+                                     IMU_SAMPLE_RATE_HZ);
+
+  rec.gps = gps.fix();  // real GPS if present; no fix indoors, published as such
+
+  Serial.printf("  [sim] target: %s  w/c %.2f  slump %.0fmm  %.1fC\n",
+                t.name, t.wc, t.slump, t.tempC);
+  Serial.printf("  [sim] solved: moisture %.0f mV, load %.0f counts\n",
+                rec.moistureMv, rec.loadCounts);
+  return rec;
+}
+
+static void runSimulation(uint8_t count) {
+  Serial.println(F("\n=== SIMULATED measurements (no sensors involved) ==="));
+  Serial.println(F("Published as data_source=simulated_onboard so they can"));
+  Serial.println(F("never be mistaken for real readings downstream."));
+  for (uint8_t i = 0; i < count; i++) {
+    MeasurementRecord rec = makeSimulatedMeasurement(i);
+    processMeasurement(rec, false);
+    delay(400);   // let the publish drain before the next one
+  }
+  Serial.println(F("=== end simulation ===\n"));
+}
+
 // ------------------------------------------------- Phase 3: model self-test
 //
 // Runs the classifier on canned feature vectors and prints the result. This
@@ -649,6 +836,7 @@ static void printHelp() {
   Serial.println(F("  s  - show calibration state"));
   Serial.println(F("  x  - erase stored calibration"));
   Serial.println(F("  t  - on-device model self-test"));
+  Serial.println(F("  sim [n] - publish n SIMULATED measurements (default 3)"));
   Serial.println(F("  --- network (Phase 4) ---"));
   Serial.println(F("  wifi <ssid> <password>  - set + save WiFi credentials"));
   Serial.println(F("  mqtt <host> [port]      - set + save MQTT broker"));
@@ -682,6 +870,11 @@ static void handleCommand() {
   if (c.startsWith("wifi ")) { configureWifi(c.substring(5)); return; }
   if (c.startsWith("mqtt")) { configureMqtt(c.substring(4)); return; }
   if (c == "net") { printNetState(); return; }
+  if (c.startsWith("sim")) {
+    const long n = c.length() > 3 ? c.substring(3).toInt() : 3;
+    runSimulation((uint8_t)constrain(n, 1, 20));
+    return;
+  }
   if (c == "netclear") {
     net::clearConfig();
     netConfig = NetConfig();
@@ -740,7 +933,7 @@ void setup() {
     // Coursework add-on: brief student-identity screen, shown once at boot
     // before the bring-up report. Uses the existing showStatusGrid() API
     // only -- no changes to the display driver itself.
-    const char* idLines[] = {"Anbuchelvan", "CSE A", "24CS0059"};
+    const char* idLines[] = {STUDENT_NAME, STUDENT_SECTION, STUDENT_ROLL};
     oled.showStatusGrid(idLines, 3);
     delay(1500);
   }
