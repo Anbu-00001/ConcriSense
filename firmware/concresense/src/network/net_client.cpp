@@ -39,9 +39,9 @@ constexpr int DST_OFFSET_SEC = 0;
 const char* netStateName(NetState s) {
   switch (s) {
     case NetState::UNCONFIGURED: return "UNCONFIGURED";
-    case NetState::WIFI_CONNECTING: return "WIFI_CONNECTING";
-    case NetState::WIFI_CONNECTED: return "WIFI_CONNECTED";
-    case NetState::MQTT_CONNECTED: return "MQTT_CONNECTED";
+    case NetState::LINK_CONNECTING: return "WIFI_CONNECTING";
+    case NetState::LINK_UP: return "WIFI_CONNECTED";
+    case NetState::BROKER_UP: return "MQTT_CONNECTED";
     case NetState::FAILED: return "FAILED";
   }
   return "?";
@@ -99,7 +99,7 @@ void begin(const NetConfig& cfg) {
   }
   mqtt.setKeepAlive(30);
 
-  gState = NetState::WIFI_CONNECTING;
+  gState = NetState::LINK_CONNECTING;
   gLastAttemptMs = millis();
 }
 
@@ -110,7 +110,7 @@ void poll() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    gState = NetState::WIFI_CONNECTING;
+    gState = NetState::LINK_CONNECTING;
     // Exponential backoff, capped. Retrying a dead AP every loop iteration
     // burns power and floods the log without ever helping.
     if (millis() - gLastAttemptMs > gBackoffMs) {
@@ -123,9 +123,9 @@ void poll() {
   }
 
   // WiFi is up.
-  if (gState == NetState::WIFI_CONNECTING) {
+  if (gState == NetState::LINK_CONNECTING) {
     gBackoffMs = 2000;
-    gState = NetState::WIFI_CONNECTED;
+    gState = NetState::LINK_UP;
     Serial.printf("[net] WiFi connected, IP %s\n",
                   WiFi.localIP().toString().c_str());
 
@@ -151,18 +151,18 @@ void poll() {
       snprintf(clientId, sizeof(clientId), "%s-%06X", DEVICE_ID,
                (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF));
       if (mqtt.connect(clientId)) {
-        gState = NetState::MQTT_CONNECTED;
+        gState = NetState::BROKER_UP;
         Serial.printf("[net] MQTT connected to %s:%u\n", gCfg.mqttHost,
                       gCfg.mqttPort);
       } else {
-        gState = NetState::WIFI_CONNECTED;
+        gState = NetState::LINK_UP;
         Serial.printf("[net] MQTT connect failed, rc=%d\n", mqtt.state());
       }
     }
     return;
   }
 
-  gState = NetState::MQTT_CONNECTED;
+  gState = NetState::BROKER_UP;
   mqtt.loop();
 }
 
@@ -185,7 +185,7 @@ NetState state() { return gState; }
 
 bool publish(const MeasurementRecord& rec, const Inference& inf,
              const char* ruleVerdict) {
-  if (gState != NetState::MQTT_CONNECTED) return false;
+  if (gState != NetState::BROKER_UP) return false;
 
   JsonDocument doc;
   doc["device_id"] = DEVICE_ID;

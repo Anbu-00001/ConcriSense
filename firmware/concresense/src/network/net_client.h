@@ -26,9 +26,9 @@ struct NetConfig {
 
 enum class NetState : uint8_t {
   UNCONFIGURED,
-  WIFI_CONNECTING,
-  WIFI_CONNECTED,
-  MQTT_CONNECTED,
+  LINK_CONNECTING,
+  LINK_UP,
+  BROKER_UP,
   FAILED
 };
 

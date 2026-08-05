@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ConcreSense — live site dashboard</title>
+<style>
+  :root {
+    --bg:#11151c; --panel:#1a212c; --grid:#2a3444; --fg:#e6edf3;
+    --muted:#8b98a9; --accent:#4aa3ff;
+    --good:#3fb950; --marginal:#d29922; --reject:#f85149;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  header { padding:18px 24px 10px; }
+  h1 { margin:0; font-size:24px; letter-spacing:-.02em; }
+  .sub { color:var(--muted); font-size:13px; margin-top:2px; }
+  .note {
+    color:var(--marginal); font-size:12px; font-style:italic; margin-top:8px;
+  }
+  .student {
+    color:var(--muted); font-size:12px; margin-top:6px;
+    padding-top:6px; border-top:1px solid var(--grid); display:inline-block;
+  }
+  .wrap { padding:0 24px 28px; display:grid; gap:16px;
+          grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); }
+  .card { background:var(--panel); border:1px solid var(--grid);
+          border-radius:10px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase;
+             letter-spacing:.08em; color:var(--muted); font-weight:600; }
+  .verdict { font-size:40px; font-weight:700; letter-spacing:-.02em; }
+  .verdict.GOOD{color:var(--good)} .verdict.MARGINAL{color:var(--marginal)}
+  .verdict.REJECT{color:var(--reject)} .verdict.UNKNOWN{color:var(--muted)}
+  .kv { display:flex; justify-content:space-between; padding:5px 0;
+        border-bottom:1px solid var(--grid); }
+  .kv:last-child{border-bottom:none}
+  .kv span:first-child{color:var(--muted)}
+  .kv span:last-child{font-variant-numeric:tabular-nums}
+  .status { display:flex; align-items:center; gap:8px; font-size:12px;
+            color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--reject); }
+  .dot.on { background:var(--good); }
+  .bars { display:flex; gap:6px; align-items:flex-end; height:70px;
+          margin-top:8px; }
+  .bar { flex:1; border-radius:4px 4px 0 0; min-height:3px; }
+  .empty { color:var(--muted); font-style:italic; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th,td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--grid);
+          font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:600; }
+  .warn { color:var(--marginal); font-size:12px; margin-top:8px; }
+  code { background:#0d1117; padding:1px 5px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ConcreSense</h1>
+  <div class="sub">On-site fresh-concrete screening · ESP32 sensor fusion · IS 456:2000</div>
+  <div class="note">
+    Readings are produced by a device calibrated against proxy materials and a model
+    trained on physics-simulated data. Not validated against laboratory-tested concrete.
+  </div>
+  <div class="student">Anbuchelvan &nbsp;·&nbsp; CSE A &nbsp;·&nbsp; 24CS0059</div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <h2>Latest verdict</h2>
+    <div id="verdict" class="verdict UNKNOWN">—</div>
+    <div id="verdictMeta" class="empty" style="margin-top:8px">
+      waiting for a device to publish…
+    </div>
+    <div class="status" style="margin-top:14px">
+      <span id="dot" class="dot"></span><span id="conn">connecting…</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Derived properties</h2>
+    <div id="derived"><div class="empty">no data yet</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Model vs IS 456 rules</h2>
+    <div id="cls"><div class="empty">no data yet</div></div>
+    <div class="bars" id="probBars"></div>
+    <div id="disagree" class="warn"></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw sensors</h2>
+    <div id="raw"><div class="empty">no data yet</div></div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Recent tests</h2>
+    <table id="hist">
+      <thead><tr>
+        <th>#</th><th>time (UTC)</th><th>w/c</th><th>slump</th><th>temp</th>
+        <th>rules</th><th>model</th><th>agree</th>
+      </tr></thead>
+      <tbody><tr><td colspan="8" class="empty">no tests recorded yet</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2, unit = '') =>
+  (v === undefined || v === null) ? '—' : Number(v).toFixed(d) + unit;
+
+function row(k, v) {
+  return `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
+}
+
+let history = [];
+
+function render(r) {
+  const cls = r.classification || {};
+  const f = r.features || {};
+  const raw = r.sensor_raw || {};
+
+  // The RULE result is what drives the headline verdict. Compliance follows
+  // IS 456, not the model -- the model is shown alongside for comparison.
+  const verdict = cls.rule_result || 'UNKNOWN';
+  const el = $('verdict');
+  el.textContent = verdict;
+  el.className = 'verdict ' + verdict;
+
+  $('verdictMeta').className = '';
+  $('verdictMeta').innerHTML =
+    `test #${r.seq ?? '?'} · ${r.timestamp_utc ?? 'no timestamp'}` +
+    (r.time_source === 'unsynced' ? ' <em>(clock not NTP-synced)</em>' : '');
+
+  $('derived').innerHTML =
+    row('w/c ratio', fmt(f.estimated_wc_ratio, 3)) +
+    row('slump', fmt(f.estimated_slump_mm, 1, ' mm')) +
+    row('yield stress τ₀', fmt(f.yield_stress_pa, 0, ' Pa')) +
+    row('penetration force', fmt(f.penetration_force_n, 3, ' N')) +
+    row('temperature', fmt(raw.temperature_c, 2, ' °C'));
+
+  $('raw').innerHTML =
+    row('moisture', fmt(raw.moisture_mv, 1, ' mV')) +
+    row('load cell', fmt(raw.load_counts, 0, ' counts')) +
+    row('vibration RMS', fmt(raw.vibration_rms_g, 4, ' g')) +
+    row('dominant freq', fmt(f.vib_dominant_hz, 2, ' Hz')) +
+    row('spectral entropy', fmt(f.vib_spectral_entropy, 3)) +
+    row('GPS fix', (r.location && r.location.fix) ? 'yes' : 'no (indoor)');
+
+  $('cls').innerHTML =
+    row('IS 456 rules', cls.rule_result ?? '—') +
+    row('TinyML model', cls.model_result ?? '—') +
+    row('confidence', cls.confidence != null ? fmt(cls.confidence * 100, 1, '%') : '—');
+
+  const p = cls.class_probabilities || {};
+  const colors = { GOOD:'var(--good)', MARGINAL:'var(--marginal)', REJECT:'var(--reject)' };
+  $('probBars').innerHTML = ['GOOD','MARGINAL','REJECT'].map(k => {
+    const v = p[k] || 0;
+    return `<div class="bar" style="height:${Math.max(3, v*100)}%;background:${colors[k]}"
+                 title="${k}: ${(v*100).toFixed(1)}%"></div>`;
+  }).join('');
+
+  // Surfaced, not hidden. If these never disagree, the model is adding
+  // nothing over the rule engine -- which is worth seeing.
+  $('disagree').textContent = cls.agreement === false
+    ? '⚠ model and rules disagree — IS 456 rules take precedence for compliance'
+    : '';
+
+  history.unshift(r);
+  history = history.slice(0, 25);
+  $('hist').querySelector('tbody').innerHTML = history.map(h => {
+    const c = h.classification || {}, hf = h.features || {}, hr = h.sensor_raw || {};
+    return `<tr>
+      <td>${h.seq ?? '?'}</td>
+      <td>${(h.timestamp_utc ?? '').replace('T',' ').replace('Z','')}</td>
+      <td>${fmt(hf.estimated_wc_ratio,3)}</td>
+      <td>${fmt(hf.estimated_slump_mm,0)}</td>
+      <td>${fmt(hr.temperature_c,1)}</td>
+      <td style="color:${colors[c.rule_result]||'var(--muted)'}">${c.rule_result??'—'}</td>
+      <td style="color:${colors[c.model_result]||'var(--muted)'}">${c.model_result??'—'}</td>
+      <td>${c.agreement === undefined ? '—' : (c.agreement ? '✓' : '✗')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $('dot').className = 'dot on'; $('conn').textContent = 'live'; };
+  ws.onclose = () => {
+    $('dot').className = 'dot';
+    $('conn').textContent = 'disconnected — retrying…';
+    setTimeout(connect, 2000);   // survive a server restart without a reload
+  };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'record') render(msg.data);
+  };
+}
+
+// Seed from history so a freshly-opened page is not blank.
+fetch('/api/history?limit=25')
+  .then(r => r.json())
+  .then(d => { if (d.data && d.data.length) d.data.forEach(render); })
+  .catch(() => {});
+
+connect();
+</script>
+</body>
+</html>

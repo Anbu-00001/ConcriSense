@@ -86,6 +86,12 @@
 #define CORE_SAMPLING 1
 #define CORE_INFERENCE_NET 0
 
+// Interval between automatic measurement cycles when auto-mode is armed ('a').
+// 5s is a deliberate choice: an IMU burst alone is 1.28s, and fresh concrete
+// properties change over minutes, not milliseconds -- sampling faster would
+// only heat the board and flood the broker.
+#define MEASURE_INTERVAL_MS 5000
+
 // ---------------------------------------------------------------- bring-up
 #define SERIAL_BAUD 115200
 #define BRINGUP_I2C_SCAN true

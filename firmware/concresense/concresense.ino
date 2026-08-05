@@ -8,14 +8,20 @@
 // Phase 2 adds feature extraction and calibration; Phase 3 adds the FreeRTOS
 // task split and the classifier.
 
+#include <WiFi.h>
 #include <Wire.h>
 
 #include "src/config.h"
 #include "src/display/oled_ssd1306.h"
 #include "src/features/fft_features.h"
+#include "src/measurement.h"
+#include "src/network/net_client.h"
 #include "src/physics/anchors_store.h"
 #include "src/physics/calibration.h"
 #include "src/sensor_status.h"
+#include "src/tinyml/model_infer.h"
+#include "src/tinyml/model_selftest.h"
+#include "src/tinyml/model_weights.h"
 #include "src/sensors/gps_neo6m.h"
 #include "src/sensors/imu_mpu6050.h"
 #include "src/sensors/loadcell_hx711.h"
@@ -31,6 +37,33 @@ GpsNeo6M gps;
 
 MoistureAnchors moistureAnchors;
 LoadCellAnchors loadAnchors;
+NetConfig netConfig;
+
+// --- Phase 3: dual-core plumbing
+//
+// Core assignment is deliberately the REVERSE of the original project spec.
+// Arduino-ESP32 pins the WiFi/TCP-IP stack to Core 0 and runs loopTask on
+// Core 1 (confirmed empirically in Phase 1: the banner reports "core 1").
+// Following the spec would put 200Hz IMU sampling and the 60us-critical HX711
+// read on the same core as the WiFi driver, turning every beacon and TCP
+// retransmit into sample jitter. See AUDIT.md section C.
+//
+// Depth 4: enough to absorb a slow publish without blocking the sampler, small
+// enough that a stalled consumer surfaces as a visible drop rather than
+// silently buffering minutes of stale readings.
+static QueueHandle_t gMeasurementQueue = nullptr;
+static TaskHandle_t gSamplingTask = nullptr;
+static TaskHandle_t gNetworkTask = nullptr;
+
+// Guards ALL sensor hardware. Both the automatic sampling task and a manual
+// 'm' typed at the console call acquireMeasurement(), and without this they can
+// interleave on the shared I2C bus and mid-HX711-conversion -- producing
+// corrupt readings that look like real ones. The console path is rare, so
+// contention is negligible; correctness is not.
+static SemaphoreHandle_t gSensorMutex = nullptr;
+
+static volatile bool gAutoMeasure = false;
+static volatile uint32_t gDroppedRecords = 0;
 
 // ---------------------------------------------------------------------------
 // Wokwi simulator add-on: verdict LEDs (optional, small, harmless on real HW)
@@ -135,23 +168,34 @@ static void printReport() {
 // One full cycle: sample every channel, extract vibration features, run the
 // physics chain, and apply the IS 456 rule engine. Phase 3 replaces the rule
 // engine with the TinyML classifier and keeps the rules as a cross-check.
-static void runMeasurementCycle(bool csv) {
-  // Quiesce the OLED for the duration of the burst. The display and the IMU
-  // share one I2C bus, and a full 128x64 frame push is ~20ms -- enough to drop
-  // four samples out of a 200Hz window and skew the FFT bin spacing.
-  const bool haveImu = imu.status() == SensorStatus::OK;
+// ------------------------------------------------- Phase 3: acquisition
+//
+// Runs on CORE_SAMPLING. Reads every channel and extracts vibration features
+// into a self-contained record. Does NOT classify, print, or touch the network
+// -- keeping this function pure sampling is what lets it stay on a core with
+// no WiFi driver competing for time.
+static MeasurementRecord acquireMeasurement() {
+  static uint32_t seq = 0;
+  MeasurementRecord rec;
 
-  float achievedHz = NAN;
-  uint16_t got = 0;
-  VibrationFeatures vf;
+  // Exclusive access to every sensor for the whole cycle. Held across the IMU
+  // burst too: a competing I2C transaction mid-burst would drop samples and
+  // silently skew the FFT.
+  if (gSensorMutex) xSemaphoreTake(gSensorMutex, portMAX_DELAY);
 
-  if (haveImu) {
-    got = imu.captureBurst(gBurst, IMU_BURST_SAMPLES, achievedHz);
+  rec.seq = ++seq;
+  rec.uptimeMs = millis();
+
+  // The OLED and IMU share one I2C bus and a full 128x64 frame push is ~20ms --
+  // enough to drop four samples from a 200Hz window and skew the FFT bin
+  // spacing. Nothing writes to the display while a burst is in flight.
+  if (imu.status() == SensorStatus::OK) {
+    float achievedHz = NAN;
+    const uint16_t got = imu.captureBurst(gBurst, IMU_BURST_SAMPLES, achievedHz);
     if (got == IMU_BURST_SAMPLES) {
-      // Deliberately uses the ACHIEVED rate, not IMU_SAMPLE_RATE_HZ: bus
-      // contention makes them differ, and using the nominal rate would put the
-      // reported dominant frequency systematically off.
-      vf = extractVibrationFeatures(gBurst, got, achievedHz);
+      // Uses the ACHIEVED rate, not the nominal 200Hz: bus contention makes
+      // them differ, and the nominal rate would bias every reported frequency.
+      rec.vib = extractVibrationFeatures(gBurst, got, achievedHz);
     }
   }
 
@@ -159,59 +203,70 @@ static void runMeasurementCycle(bool csv) {
   Reading tc = temp.readCelsius();
   Reading load = loadcell.read();
 
-  const float tempC = tc.valid() ? tc.value : NAN;
-  DerivedProperties d = deriveAll(mv.valid() ? mv.value : NAN, tempC,
-                                  load.valid() ? load.value : NAN,
-                                  moistureAnchors, loadAnchors);
+  rec.moistureValid = mv.valid();
+  rec.tempValid = tc.valid();
+  rec.loadValid = load.valid();
+  rec.moistureMv = mv.valid() ? mv.value : NAN;
+  rec.tempC = tc.valid() ? tc.value : NAN;
+  rec.loadCounts = load.valid() ? load.value : NAN;
 
-  QualityClass q = QualityClass::UNKNOWN;
-  if (d.wcValid && d.slumpValid) {
-    q = classifyIS456(d.wcRatio, d.slumpMm, tempC);
-  }
-  updateVerdictLeds(q);  // Wokwi add-on, see definition above
+  rec.derived = deriveAll(rec.moistureMv, rec.tempC, rec.loadCounts,
+                          moistureAnchors, loadAnchors);
+  rec.gps = gps.fix();
+
+  if (gSensorMutex) xSemaphoreGive(gSensorMutex);
+  return rec;
+}
+
+// ------------------------------------------------- Phase 3: reporting
+static void reportMeasurement(const MeasurementRecord& rec,
+                              const Inference& inf, QualityClass ruleClass,
+                              bool csv) {
+  const DerivedProperties& d = rec.derived;
 
   if (csv) {
     // Matches FEATURE_COLUMNS in tinyml_model/dataset_generator.py so real
-    // readings can be merged with --merge-real. Blank fields stay blank rather
-    // than becoming zero: a zero would be indistinguishable from a real value
-    // and would poison the training set.
+    // readings merge cleanly with --merge-real. Blank fields stay blank: a
+    // zero would be indistinguishable from a real reading and poison training.
     Serial.print(F("CSV,"));
-    if (mv.valid()) Serial.print(mv.value, 1); Serial.print(',');
-    if (tc.valid()) Serial.print(tc.value, 4); Serial.print(',');
-    if (load.valid()) Serial.print(load.value, 4); Serial.print(',');
-    if (vf.valid) Serial.print(vf.rms, 5); Serial.print(',');
-    if (vf.valid) Serial.print(vf.dominantFreqHz, 3); Serial.print(',');
-    if (vf.valid) Serial.print(vf.spectralEntropy, 5); Serial.print(',');
-    if (vf.valid) Serial.print(vf.dampingRatio, 5);
+    if (rec.moistureValid) Serial.print(rec.moistureMv, 1); Serial.print(',');
+    if (rec.tempValid) Serial.print(rec.tempC, 4); Serial.print(',');
+    if (!isnan(d.forceN)) Serial.print(d.forceN, 4); Serial.print(',');
+    if (rec.vib.valid) Serial.print(rec.vib.rms, 5); Serial.print(',');
+    if (rec.vib.valid) Serial.print(rec.vib.dominantFreqHz, 3); Serial.print(',');
+    if (rec.vib.valid) Serial.print(rec.vib.spectralEntropy, 5); Serial.print(',');
+    if (rec.vib.valid) Serial.print(rec.vib.dampingRatio, 5);
     Serial.println();
     return;
   }
 
-  Serial.println(F("\n----------- measurement cycle -----------"));
+  Serial.printf("\n--------- measurement #%lu (core %d) ---------\n",
+                (unsigned long)rec.seq, xPortGetCoreID());
+
   Serial.print(F("  moisture   : "));
-  if (mv.valid()) Serial.printf("%.0f mV\n", mv.value);
+  if (rec.moistureValid) Serial.printf("%.0f mV\n", rec.moistureMv);
   else Serial.println(statusName(moisture.status()));
 
   Serial.print(F("  temperature: "));
-  if (tc.valid()) Serial.printf("%.2f C\n", tc.value);
+  if (rec.tempValid) Serial.printf("%.2f C\n", rec.tempC);
   else Serial.println(statusName(temp.status()));
 
   Serial.print(F("  load       : "));
-  if (load.valid()) Serial.printf("%.2f (raw units)\n", load.value);
+  if (rec.loadValid) Serial.printf("%.2f counts\n", rec.loadCounts);
   else Serial.println(statusName(loadcell.status()));
 
   Serial.print(F("  vibration  : "));
-  if (vf.valid) {
-    Serial.printf("%u samples @ %.1f Hz\n", got, achievedHz);
-    Serial.printf("               rms=%.4f g  dom=%.2f Hz  entropy=%.3f  "
-                  "damping=%.4f\n",
-                  vf.rms, vf.dominantFreqHz, vf.spectralEntropy, vf.dampingRatio);
-    if (vf.dominantFreqHz > 40.0f) {
+  if (rec.vib.valid) {
+    Serial.printf("rms=%.4f g  dom=%.2f Hz  entropy=%.3f  damping=%.4f\n",
+                  rec.vib.rms, rec.vib.dominantFreqHz, rec.vib.spectralEntropy,
+                  rec.vib.dampingRatio);
+    if (rec.vib.dominantFreqHz > 40.0f) {
       Serial.println(F("               (near the 44Hz DLPF corner - this peak"
                        " is filter-shaped)"));
     }
   } else {
-    Serial.println(haveImu ? F("burst incomplete") : F("ABSENT"));
+    Serial.println(imu.status() == SensorStatus::OK ? F("burst incomplete")
+                                                    : F("ABSENT"));
   }
 
   Serial.println(F("  --- derived ---"));
@@ -224,31 +279,146 @@ static void runMeasurementCycle(bool csv) {
                                               : F("NOT CALIBRATED - run 'cm')"));
   }
   if (d.slumpValid) {
-    Serial.printf("  tau_0=%.0f Pa  slump=%.1f mm\n", d.yieldStressPa, d.slumpMm);
+    Serial.printf("  F=%.3f N  tau_0=%.0f Pa  slump=%.1f mm\n", d.forceN,
+                  d.yieldStressPa, d.slumpMm);
   } else {
     Serial.print(F("  slump      : unavailable ("));
     Serial.println(loadAnchors.calibrated ? F("no load reading)")
                                           : F("NOT CALIBRATED - run 'cl')"));
   }
 
-  Serial.printf("  IS 456     : %s\n", qualityName(q));
-  if (q == QualityClass::UNKNOWN) {
-    Serial.println(F("  (UNKNOWN is correct here - the device refuses to"));
-    Serial.println(F("   classify without calibrated inputs rather than"));
-    Serial.println(F("   emitting a confident-looking guess.)"));
+  // --- both classifiers, side by side.
+  //
+  // The model does NOT replace the rule engine. Printing both is the only way
+  // to notice if the MLP has simply re-learned the IS 456 thresholds it was
+  // trained on -- in which case it is adding nothing, however good its
+  // accuracy number looks.
+  Serial.println(F("  --- classification ---"));
+  Serial.printf("  IS 456 rules : %s\n", qualityName(ruleClass));
+  if (inf.valid) {
+    Serial.printf("  TinyML model : %s  (conf %.1f%%)\n",
+                  inferenceClassName(inf.classIndex), inf.confidence * 100.0f);
+    Serial.printf("                 GOOD %.2f  MARGINAL %.2f  REJECT %.2f\n",
+                  inf.probabilities[0], inf.probabilities[1],
+                  inf.probabilities[2]);
+    const bool agree =
+        strcmp(inferenceClassName(inf.classIndex), qualityName(ruleClass)) == 0;
+    if (!agree && ruleClass != QualityClass::UNKNOWN) {
+      Serial.println(F("  ** MODEL AND RULES DISAGREE - rules take precedence"));
+      Serial.println(F("     for compliance; the disagreement is published."));
+    }
+  } else {
+    Serial.println(F("  TinyML model : UNKNOWN (incomplete feature vector)"));
+    Serial.println(F("  (refusing to classify beats guessing from zeros)"));
   }
-  Serial.println(F("-----------------------------------------\n"));
+  Serial.println(F("------------------------------------------\n"));
 
   if (oled.status() == SensorStatus::OK) {
-    char l0[24], l1[24], l2[24];
-    snprintf(l0, sizeof(l0), "IS456: %s", qualityName(q));
-    if (d.wcValid) snprintf(l1, sizeof(l1), "w/c  %.2f", d.wcRatio);
-    else snprintf(l1, sizeof(l1), "w/c  --");
-    if (d.slumpValid) snprintf(l2, sizeof(l2), "slump %.0fmm", d.slumpMm);
-    else snprintf(l2, sizeof(l2), "slump --");
-    const char* lines[] = {l0, l1, l2};
-    oled.showStatusGrid(lines, 3);
+    char l0[24], l1[24], l2[24], l3[24];
+    snprintf(l0, sizeof(l0), "IS456: %s", qualityName(ruleClass));
+    snprintf(l1, sizeof(l1), "ML: %s",
+             inf.valid ? inferenceClassName(inf.classIndex) : "--");
+    if (d.wcValid) snprintf(l2, sizeof(l2), "w/c  %.2f", d.wcRatio);
+    else snprintf(l2, sizeof(l2), "w/c  --");
+    if (d.slumpValid) snprintf(l3, sizeof(l3), "slump %.0fmm", d.slumpMm);
+    else snprintf(l3, sizeof(l3), "slump --");
+    const char* lines[] = {l0, l1, l2, l3};
+    oled.showStatusGrid(lines, 4);
   }
+}
+
+// Classify + report + publish. Runs on CORE_INFERENCE_NET.
+static void processMeasurement(const MeasurementRecord& rec, bool csv) {
+  QualityClass ruleClass = QualityClass::UNKNOWN;
+  if (rec.derived.wcValid && rec.derived.slumpValid) {
+    ruleClass = classifyIS456(rec.derived.wcRatio, rec.derived.slumpMm,
+                              rec.tempValid ? rec.tempC : NAN);
+  }
+
+  Inference inf;
+  float features[7];
+  if (rec.toFeatureVector(features)) {
+    inf = runInference(features, 7);
+  }
+
+  updateVerdictLeds(ruleClass);
+  reportMeasurement(rec, inf, ruleClass, csv);
+
+  if (net::state() == NetState::BROKER_UP) {
+    net::publish(rec, inf, qualityName(ruleClass));
+  }
+}
+
+// Synchronous single-shot, for the 'm' / 'c' serial commands. Runs inline on
+// whichever core the console is on rather than going through the queue, so the
+// output appears immediately after the command.
+static void runMeasurementCycle(bool csv) {
+  processMeasurement(acquireMeasurement(), csv);
+}
+
+// ------------------------------------------------- Phase 3: FreeRTOS tasks
+
+// CORE_SAMPLING (Core 1). Timing-critical work only.
+//
+// Ticks at 100ms and measures on a longer interval, rather than simply sleeping
+// for MEASURE_INTERVAL_MS. The NEO-6M emits an NMEA burst every second at 9600
+// baud and the UART FIFO is only 128 bytes, so sleeping 5s between polls would
+// overflow it and corrupt sentences. All GPS access lives on this core so the
+// non-thread-safe TinyGPS++ parser is never touched from two cores at once.
+static void samplingTask(void*) {
+  uint32_t lastMeasureMs = 0;
+  for (;;) {
+    gps.poll();
+
+    if (gAutoMeasure && (millis() - lastMeasureMs >= MEASURE_INTERVAL_MS)) {
+      lastMeasureMs = millis();
+      MeasurementRecord rec = acquireMeasurement();
+      // Non-blocking send: if the consumer is stalled, refuse the new record
+      // and count it rather than blocking here. Blocking the sampler would
+      // leave the HX711 sitting mid-conversion and let the IMU burst cadence
+      // drift -- corrupting the very data being queued.
+      if (xQueueSend(gMeasurementQueue, &rec, 0) != pdTRUE) {
+        gDroppedRecords++;
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+// CORE_INFERENCE_NET (Core 0). Inference, display, and networking -- all
+// jitter-tolerant, and this is the core the WiFi driver already lives on.
+static void networkTask(void*) {
+  MeasurementRecord rec;
+  for (;;) {
+    net::poll();
+    // Short timeout rather than portMAX_DELAY: net::poll() must keep running
+    // to service MQTT keepalive and WiFi reconnects even when no measurements
+    // are arriving.
+    if (xQueueReceive(gMeasurementQueue, &rec, pdMS_TO_TICKS(200)) == pdTRUE) {
+      processMeasurement(rec, false);
+    }
+  }
+}
+
+static void startTasks() {
+  gSensorMutex = xSemaphoreCreateMutex();
+  gMeasurementQueue = xQueueCreate(4, sizeof(MeasurementRecord));
+  if (gMeasurementQueue == nullptr || gSensorMutex == nullptr) {
+    Serial.println(F("FATAL: could not allocate queue/mutex"));
+    return;
+  }
+
+  // Stack sizes are generous because both tasks hold a MeasurementRecord (with
+  // its embedded feature structs) on the stack, and the network task also runs
+  // ArduinoJson serialisation.
+  xTaskCreatePinnedToCore(samplingTask, "sampling", 8192, nullptr, 3,
+                          &gSamplingTask, CORE_SAMPLING);
+  xTaskCreatePinnedToCore(networkTask, "network", 12288, nullptr, 2,
+                          &gNetworkTask, CORE_INFERENCE_NET);
+
+  Serial.printf("[rtos] sampling task -> core %d (priority 3)\n", CORE_SAMPLING);
+  Serial.printf("[rtos] network  task -> core %d (priority 2)\n",
+                CORE_INFERENCE_NET);
 }
 
 // ------------------------------------------------- Phase 2: calibration
@@ -342,14 +512,148 @@ static void calibrateLoadCell() {
                 loadAnchors.countsPerNewton);
 }
 
+// ------------------------------------------------- Phase 3: model self-test
+//
+// Runs the classifier on canned feature vectors and prints the result. This
+// exists because the sensors are not wired yet: without it there is no way to
+// know the model actually executes correctly on real silicon rather than just
+// on the host. The vectors are real rows from the held-out split, and the
+// expected classes are what sklearn predicted for them at training time.
+static void modelSelfTest() {
+  Serial.println(F("\n--- on-device model self-test ---"));
+  Serial.printf("  arch: %d -> %d (ReLU) -> %d (softmax), float32\n",
+                MODEL_N_FEATURES, MODEL_N_HIDDEN, MODEL_N_CLASSES);
+  Serial.println(F("  vectors + expected classes are generated with the"));
+  Serial.println(F("  weights, so they cannot go stale after a retrain."));
+
+  uint8_t pass = 0;
+  for (int v = 0; v < SELFTEST_N; v++) {
+    const uint32_t t0 = micros();
+    Inference inf = runInference(SELFTEST_INPUTS[v], MODEL_N_FEATURES);
+    const uint32_t dt = micros() - t0;
+
+    if (!inf.valid) {
+      Serial.printf("  vector %d -> INVALID\n", v);
+      continue;
+    }
+    const char* got = inferenceClassName(inf.classIndex);
+    const bool ok = strcmp(got, SELFTEST_EXPECTED[v]) == 0;
+    if (ok) pass++;
+
+    Serial.printf("  [%s] expect %-8s got %-8s conf %.1f%%  (%lu us)\n",
+                  ok ? "ok" : "FAIL", SELFTEST_EXPECTED[v], got,
+                  inf.confidence * 100.0f, (unsigned long)dt);
+    Serial.printf("       GOOD %.3f  MARGINAL %.3f  REJECT %.3f\n",
+                  inf.probabilities[0], inf.probabilities[1],
+                  inf.probabilities[2]);
+  }
+
+  Serial.printf("  %u/%d vectors match the trained model.\n", pass, SELFTEST_N);
+  Serial.println(F("  (times above are the real on-device inference cost)"));
+  Serial.println(F("---------------------------------\n"));
+}
+
+// ------------------------------------------------- Phase 4: network config
+//
+// Credentials are typed here at runtime and stored in NVS. They are
+// deliberately NOT in any source file, so this repository can be committed,
+// shared, or submitted without leaking WiFi access.
+static void configureWifi(const String& args) {
+  const int sp = args.indexOf(' ');
+  if (sp <= 0) {
+    Serial.println(F("usage: wifi <ssid> <password>"));
+    Serial.println(F("  (an SSID containing spaces is not supported here;"));
+    Serial.println(F("   set it once from the Arduino IDE monitor instead)"));
+    return;
+  }
+  String ssid = args.substring(0, sp);
+  String pass = args.substring(sp + 1);
+  ssid.trim();
+  pass.trim();
+
+  strncpy(netConfig.ssid, ssid.c_str(), sizeof(netConfig.ssid) - 1);
+  strncpy(netConfig.pass, pass.c_str(), sizeof(netConfig.pass) - 1);
+  netConfig.configured = strlen(netConfig.ssid) > 0 &&
+                         strlen(netConfig.mqttHost) > 0;
+  net::saveConfig(netConfig);
+
+  // The password is never echoed back, here or in 'net'.
+  Serial.printf("saved WiFi SSID '%s' (password %u chars, not shown)\n",
+                netConfig.ssid, (unsigned)strlen(netConfig.pass));
+  if (!netConfig.configured) {
+    Serial.println(F("MQTT broker still unset - run: mqtt <host> [port]"));
+  } else {
+    net::begin(netConfig);
+  }
+}
+
+static void configureMqtt(const String& args) {
+  if (args.length() == 0) {
+    Serial.println(F("usage: mqtt <host-or-ip> [port]   (default port 1883)"));
+    return;
+  }
+  const int sp = args.indexOf(' ');
+  String host = sp > 0 ? args.substring(0, sp) : args;
+  host.trim();
+  uint16_t port = 1883;
+  if (sp > 0) {
+    const long p = args.substring(sp + 1).toInt();
+    if (p > 0 && p < 65536) port = (uint16_t)p;
+  }
+
+  strncpy(netConfig.mqttHost, host.c_str(), sizeof(netConfig.mqttHost) - 1);
+  netConfig.mqttPort = port;
+  netConfig.configured = strlen(netConfig.ssid) > 0 &&
+                         strlen(netConfig.mqttHost) > 0;
+  net::saveConfig(netConfig);
+
+  Serial.printf("saved MQTT broker %s:%u\n", netConfig.mqttHost,
+                netConfig.mqttPort);
+  if (!netConfig.configured) {
+    Serial.println(F("WiFi still unset - run: wifi <ssid> <password>"));
+  } else {
+    net::begin(netConfig);
+  }
+}
+
+static void printNetState() {
+  Serial.println(F("\nnetwork state:"));
+  Serial.printf("  state    : %s\n", netStateName(net::state()));
+  Serial.printf("  ssid     : %s\n",
+                strlen(netConfig.ssid) ? netConfig.ssid : "(unset)");
+  Serial.printf("  password : %s\n",
+                strlen(netConfig.pass) ? "(set, not shown)" : "(unset)");
+  Serial.printf("  broker   : %s:%u\n",
+                strlen(netConfig.mqttHost) ? netConfig.mqttHost : "(unset)",
+                netConfig.mqttPort);
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("  ip       : %s   rssi %d dBm\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  }
+  Serial.printf("  ntp time : %s\n", net::timeSynced() ? "synced" : "NOT synced");
+  Serial.printf("  topic    : concresense/site/%s/test\n", DEVICE_ID);
+  Serial.printf("  auto     : %s (every %d ms)\n", gAutoMeasure ? "ON" : "OFF",
+                MEASURE_INTERVAL_MS);
+  Serial.printf("  dropped  : %lu record(s) (queue full)\n",
+                (unsigned long)gDroppedRecords);
+  Serial.println();
+}
+
 static void printHelp() {
   Serial.println(F("\ncommands:"));
   Serial.println(F("  m  - run one measurement cycle"));
   Serial.println(F("  c  - run measurement, print as CSV (for --merge-real)"));
+  Serial.println(F("  a  - toggle automatic measurement loop"));
   Serial.println(F("  cm - calibrate moisture range anchors"));
   Serial.println(F("  cl - calibrate load cell"));
   Serial.println(F("  s  - show calibration state"));
   Serial.println(F("  x  - erase stored calibration"));
+  Serial.println(F("  t  - on-device model self-test"));
+  Serial.println(F("  --- network (Phase 4) ---"));
+  Serial.println(F("  wifi <ssid> <password>  - set + save WiFi credentials"));
+  Serial.println(F("  mqtt <host> [port]      - set + save MQTT broker"));
+  Serial.println(F("  net                     - show network status"));
+  Serial.println(F("  netclear                - erase stored credentials"));
   Serial.println(F("  h  - this help\n"));
 }
 
@@ -375,12 +679,28 @@ static void handleCommand() {
   String c = cmd;
   c.trim();
 
+  if (c.startsWith("wifi ")) { configureWifi(c.substring(5)); return; }
+  if (c.startsWith("mqtt")) { configureMqtt(c.substring(4)); return; }
+  if (c == "net") { printNetState(); return; }
+  if (c == "netclear") {
+    net::clearConfig();
+    netConfig = NetConfig();
+    Serial.println(F("network credentials erased (reboot to apply)"));
+    return;
+  }
+  if (c == "a") {
+    gAutoMeasure = !gAutoMeasure;
+    Serial.printf("automatic measurement %s\n", gAutoMeasure ? "ON" : "OFF");
+    return;
+  }
+
   if (c == "m") runMeasurementCycle(false);
   else if (c == "c") runMeasurementCycle(true);
   else if (c == "cm") calibrateMoisture();
   else if (c == "cl") calibrateLoadCell();
   else if (c == "s") printCalState();
   else if (c == "x") { anchors::clear(); Serial.println(F("calibration erased (reboot to apply)")); }
+  else if (c == "t") modelSelfTest();
   else if (c == "h") printHelp();
   else if (c.length()) Serial.println(F("unknown command - 'h' for help"));
 }
@@ -529,43 +849,46 @@ void setup() {
     oled.showStatusGrid(lines, 3);
   }
 
+  // --- Phase 4: restore saved network credentials and start connecting.
+  net::loadConfig(netConfig);
+  if (netConfig.configured) {
+    Serial.printf("[net] stored config: ssid '%s', broker %s:%u\n",
+                  netConfig.ssid, netConfig.mqttHost, netConfig.mqttPort);
+    net::begin(netConfig);
+  } else {
+    Serial.println(F("[net] not configured - run 'wifi' and 'mqtt' to set up"));
+  }
+
+  // --- Phase 3: hand the real work to the pinned tasks.
+  startTasks();
+
   printCalState();
   printHelp();
-  Serial.println(F("Entering live loop (1 Hz telemetry).\n"));
+  Serial.println(F("Ready. 'm' for one measurement, 'a' for the auto loop.\n"));
 }
 
 // ---------------------------------------------------------------- loop
+//
+// Deliberately almost empty. All real work now lives in the two pinned tasks;
+// loopTask exists only to service the console.
+//
+// It must NOT read sensors directly any more. loopTask runs on Core 1 -- the
+// same core as samplingTask -- so direct reads here would interleave with an
+// in-flight IMU burst or HX711 conversion. Manual measurements go through
+// runMeasurementCycle(), which takes gSensorMutex like everything else.
 void loop() {
-  static uint32_t n = 0;
-  gps.poll();  // drain UART every pass so the FIFO never overflows
-
   handleCommand();
 
-  Serial.printf("[%6lu] ", (unsigned long)++n);
-
-  if (moisture.status() == SensorStatus::OK) {
-    Serial.printf("moist=%.0fmV ", moisture.readMilliVolts().value);
-  }
-  if (temp.status() == SensorStatus::OK) {
-    Serial.printf("T=%.2fC ", temp.readCelsius().value);
-  }
-  if (loadcell.status() == SensorStatus::OK) {
-    Serial.printf("load=%.1f ", loadcell.read().value);
-  }
-  if (imu.status() == SensorStatus::OK) {
-    float ax, ay, az;
-    if (imu.readAccel(ax, ay, az)) {
-      Serial.printf("|a|=%.3fg ", sqrtf(ax * ax + ay * ay + az * az));
-    }
-  }
-  if (gps.status() == SensorStatus::OK) {
-    GpsFix f = gps.fix();
-    Serial.printf("sats=%u%s ", f.satellites, f.valid ? "*" : "");
+  // Low-rate heartbeat so an idle board still visibly proves both cores are
+  // alive, without flooding the console during the auto loop.
+  static uint32_t lastBeat = 0;
+  if (millis() - lastBeat > 10000) {
+    lastBeat = millis();
+    Serial.printf("[hb] uptime %lus  heap %u B  net %s  auto %s  dropped %lu\n",
+                  (unsigned long)(millis() / 1000), ESP.getFreeHeap(),
+                  netStateName(net::state()), gAutoMeasure ? "ON" : "OFF",
+                  (unsigned long)gDroppedRecords);
   }
 
-  // On a bare board none of the above print, so emit something that proves the
-  // loop is alive rather than an empty line.
-  Serial.printf("heap=%u\n", ESP.getFreeHeap());
-
-  delay(1000);
+  delay(50);
 }

@@ -81,3 +81,22 @@ simulation/out/
 *.mp4
 *.avi
 *.mov
+
+# Node.js dependencies.
+# Regenerate with `npm install` in dashboard/server -- package-lock.json is
+# committed, so installs are reproducible. This directory alone accounted for
+# 2162 of 2181 "changes" the editor was reporting.
+node_modules/
+npm-debug.log*
+.npm/
+
+# Compiled host-test binaries.
+# Produced by tools/hosttest/run.sh and run_model.sh in ~2 seconds. These have
+# no file extension, so the *.out / *.exe rules above do not catch them.
+tools/hosttest/hosttest
+tools/hosttest/hosttest_model
+
+# Editor/agent scratch
+.claude/
+.codegraph/
+graphify-out/
