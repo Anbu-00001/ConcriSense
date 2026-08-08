@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = "firmware/concresense/build/esp32.esp32.esp32/concresense.ino.merged.bin"
+elf = "firmware/concresense/build/esp32.esp32.esp32/concresense.ino.elf"

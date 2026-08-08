@@ -100,3 +100,10 @@ tools/hosttest/hosttest_model
 .claude/
 .codegraph/
 graphify-out/
+
+# Hardware shopping research -- working docs, not project source.
+# The generated .docx is the actual deliverable (parts were ordered from it);
+# kept on disk, just not tracked.
+SHOPPING_BRIEF.md
+SHOPPING_DOCX_PROMPT*.md
+ConcreSense_Hardware_Shopping_Guide.docx

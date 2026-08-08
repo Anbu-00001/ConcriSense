@@ -62,7 +62,7 @@ static TaskHandle_t gNetworkTask = nullptr;
 // contention is negligible; correctness is not.
 static SemaphoreHandle_t gSensorMutex = nullptr;
 
-static volatile bool gAutoMeasure = false;
+static volatile bool gAutoMeasure = true;
 static volatile uint32_t gDroppedRecords = 0;
 
 // ---------------------------------------------------------------------------
