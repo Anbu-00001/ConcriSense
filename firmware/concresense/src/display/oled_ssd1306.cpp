@@ -143,3 +143,42 @@ void OledDisplay::showVerdict(const char* verdict, const char* mlLine,
 
   d_->display();
 }
+
+void OledDisplay::showLiveReadings(float tempC, bool tempValid,
+                                    float loadCounts, bool loadValid) {
+  if (status_ != SensorStatus::OK) return;
+  d_->clearDisplay();
+
+  d_->setTextSize(1);
+  d_->setCursor(0, 0);
+  d_->print(F("LIVE SENSORS"));
+  if ((millis() / 500) % 2 == 0) d_->fillCircle(124, 3, 2, SSD1306_WHITE);
+  d_->drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  d_->setCursor(0, 14);
+  d_->print(F("temperature"));
+  d_->setTextSize(2);
+  d_->setCursor(0, 24);
+  if (tempValid) {
+    char t[12];
+    snprintf(t, sizeof(t), "%.1fC", tempC);
+    d_->print(t);
+  } else {
+    d_->print(F("--"));
+  }
+
+  d_->setTextSize(1);
+  d_->setCursor(0, 44);
+  d_->print(F("load cell (raw counts)"));
+  d_->setTextSize(2);
+  d_->setCursor(0, 54);
+  if (loadValid) {
+    char l[16];
+    snprintf(l, sizeof(l), "%.0f", loadCounts);
+    d_->print(l);
+  } else {
+    d_->print(F("--"));
+  }
+
+  d_->display();
+}

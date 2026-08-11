@@ -27,7 +27,13 @@ bool gTimeSynced = false;
 // and comfortably exceeds that. Verified behaviour: publish() returns false and
 // sends NOTHING rather than truncating, so without this the dashboard would
 // simply never receive a message and the cause would be invisible.
-constexpr uint16_t MQTT_BUFFER = 768;
+//
+// The buffer must hold the whole MQTT packet, not just the payload: topic
+// string ("concresense/site/<DEVICE_ID>/test", ~44 bytes here) and protocol
+// framing sit on top of the JSON body. 768 was sized to the payload alone and
+// measurably failed against the real topic+payload combination on real
+// hardware -- 1024 leaves genuine headroom instead of chasing the exact byte.
+constexpr uint16_t MQTT_BUFFER = 1024;
 
 // Bangalore is UTC+5:30, but timestamps are published as UTC and the offset is
 // left to the dashboard. Passing 0 here keeps gmtime() honest.

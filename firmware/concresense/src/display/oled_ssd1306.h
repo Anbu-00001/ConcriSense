@@ -29,6 +29,12 @@ class OledDisplay {
   void showVerdict(const char* verdict, const char* mlLine,
                     const char* wcLine, const char* slumpLine);
 
+  // Shown instead of showVerdict() when calibration is incomplete, so the
+  // "not classified yet" state is a live readout rather than a dead-end
+  // "UNKNOWN" label repeating every cycle.
+  void showLiveReadings(float tempC, bool tempValid, float loadCounts,
+                        bool loadValid);
+
   SensorStatus status() const { return status_; }
 
  private:

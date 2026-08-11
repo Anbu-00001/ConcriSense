@@ -336,14 +336,22 @@ static void reportMeasurement(const MeasurementRecord& rec,
   Serial.println(F("------------------------------------------\n"));
 
   if (oled.status() == SensorStatus::OK) {
-    char mlLine[24], wcLine[24], slumpLine[24];
-    snprintf(mlLine, sizeof(mlLine), "ML: %s",
-             inf.valid ? inferenceClassName(inf.classIndex) : "--");
-    if (d.wcValid) snprintf(wcLine, sizeof(wcLine), "w/c    %.2f", d.wcRatio);
-    else snprintf(wcLine, sizeof(wcLine), "w/c    --");
-    if (d.slumpValid) snprintf(slumpLine, sizeof(slumpLine), "slump  %.0fmm", d.slumpMm);
-    else snprintf(slumpLine, sizeof(slumpLine), "slump  --");
-    oled.showVerdict(qualityName(ruleClass), mlLine, wcLine, slumpLine);
+    if (ruleClass == QualityClass::UNKNOWN) {
+      // Not classifiable yet (calibration incomplete) -- show a live readout
+      // of what IS actually measured instead of a dead-end "UNKNOWN" label
+      // repeating every cycle.
+      oled.showLiveReadings(rec.tempC, rec.tempValid, rec.loadCounts,
+                            rec.loadValid);
+    } else {
+      char mlLine[24], wcLine[24], slumpLine[24];
+      snprintf(mlLine, sizeof(mlLine), "ML: %s",
+               inf.valid ? inferenceClassName(inf.classIndex) : "--");
+      if (d.wcValid) snprintf(wcLine, sizeof(wcLine), "w/c    %.2f", d.wcRatio);
+      else snprintf(wcLine, sizeof(wcLine), "w/c    --");
+      if (d.slumpValid) snprintf(slumpLine, sizeof(slumpLine), "slump  %.0fmm", d.slumpMm);
+      else snprintf(slumpLine, sizeof(slumpLine), "slump  --");
+      oled.showVerdict(qualityName(ruleClass), mlLine, wcLine, slumpLine);
+    }
   }
 }
 

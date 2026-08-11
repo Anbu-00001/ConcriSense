@@ -187,6 +187,23 @@ app.get('/api/summary', (req, res) => {
   });
 });
 
+// Clears server-side history so a demo can start from a clean slate.
+// Does NOT touch stats.startedAt (the server process did not restart) or the
+// mqtt/websocket connections -- only the retained test records. Broadcast to
+// every connected client (both dashboards) so all open tabs clear in place,
+// not just the one that clicked the button.
+app.post('/api/reset', (req, res) => {
+  const cleared = history.length;
+  history.length = 0;
+  lastRecord = null;
+  stats.received = 0;
+  stats.malformed = 0;
+  const reset_at = new Date().toISOString();
+  console.log(`[reset] cleared ${cleared} record(s) via /api/reset`);
+  broadcast({ type: 'reset', reset_at });
+  res.json({ ok: true, cleared, reset_at });
+});
+
 // One-click IS 456:2000 site audit PDF.
 //
 // Streamed straight to the response rather than buffered: a long test history
