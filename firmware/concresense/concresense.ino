@@ -339,9 +339,15 @@ static void reportMeasurement(const MeasurementRecord& rec,
     if (ruleClass == QualityClass::UNKNOWN) {
       // Not classifiable yet (calibration incomplete) -- show a live readout
       // of what IS actually measured instead of a dead-end "UNKNOWN" label
-      // repeating every cycle.
-      oled.showLiveReadings(rec.tempC, rec.tempValid, rec.loadCounts,
-                            rec.loadValid);
+      // repeating every cycle. While there is no GPS fix (the normal indoor
+      // case), alternate every other cycle with real GPS search telemetry
+      // instead of leaving that sensor invisible the whole time.
+      if (!rec.gps.valid && (rec.seq % 2) == 0) {
+        oled.showGpsSearching(rec.gps.satellitesInView, rec.gps.searchElapsedMs);
+      } else {
+        oled.showLiveReadings(rec.tempC, rec.tempValid, rec.loadCounts,
+                              rec.loadValid);
+      }
     } else {
       char mlLine[24], wcLine[24], slumpLine[24];
       snprintf(mlLine, sizeof(mlLine), "ML: %s",

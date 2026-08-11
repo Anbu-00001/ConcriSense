@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ConcreSense — live sensors</title>
+<style>
+  /* Same tokens as the main dashboard (dashboard/public/index.html) --
+     kept in sync deliberately so this page reads as the same product, not a
+     bolted-on extra. Status colors are the dataviz skill's validated status
+     palette; --accent/--accent2 are its slot-1/slot-2 categorical hues, used
+     here exactly as the main dashboard uses them for its two sparklines, so
+     the two live series never collide. */
+  :root {
+    --bg:#11151c; --panel:#1a212c; --panel-hi:#1f2836; --grid:#2a3444; --fg:#e6edf3;
+    --muted:#8b98a9; --accent:#3987e5; --accent2:#d95926;
+    --good:#0ca30c; --marginal:#fab219; --reject:#d03b3b;
+    --good-soft:rgba(12,163,12,.14); --marginal-soft:rgba(250,178,25,.14); --reject-soft:rgba(208,59,59,.14);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:
+           radial-gradient(1100px 480px at 15% -10%, #16202f 0%, var(--bg) 55%) fixed;
+         color:var(--fg);
+         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:20px 26px 8px; position:relative; }
+  header::after { content:""; position:absolute; left:26px; right:26px; bottom:0;
+                  height:1px; background:linear-gradient(90deg,var(--grid),transparent 85%); }
+  .titlerow { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:25px; font-weight:800; letter-spacing:-.03em;
+       background:linear-gradient(90deg,#f2f6fb,#9db8dd 130%);
+       -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tag { font-size:10.5px; font-weight:700; letter-spacing:.06em; color:var(--accent);
+         border:1px solid rgba(57,135,229,.4); background:rgba(57,135,229,.1);
+         border-radius:20px; padding:2px 9px; text-transform:uppercase; }
+  .sub { color:var(--muted); font-size:13px; margin-top:3px; }
+  .note { color:var(--marginal); font-size:11.5px; margin-top:9px; max-width:64ch;
+          padding:6px 10px; background:var(--marginal-soft); border-radius:6px;
+          border:1px solid rgba(250,178,25,.25); }
+  .headerfoot { display:flex; align-items:center; justify-content:space-between;
+                flex-wrap:wrap; gap:10px; margin-top:12px; padding-bottom:14px; }
+  .student { color:var(--muted); font-size:11.5px; display:flex; align-items:center; gap:12px; }
+  .navback { color:var(--muted); font-size:12px; text-decoration:none; }
+  .navback:hover { color:var(--fg); }
+  .statusstrip { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
+          background:var(--panel); border:1px solid var(--grid); border-radius:20px;
+          padding:4px 10px 4px 8px; }
+  .pill b { color:var(--fg); font-weight:600; }
+  .pill .pdot { width:7px; height:7px; border-radius:50%; background:var(--muted); flex:none; }
+  .pill .pdot.up { background:var(--good); box-shadow:0 0 0 3px var(--good-soft); }
+  .pill .pdot.down { background:var(--reject); }
+
+  .livewrap { padding:6px 26px 32px; display:grid; gap:16px;
+              grid-template-columns:repeat(auto-fit,minmax(460px,1fr)); }
+  .card { background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+          border:1px solid var(--grid); border-radius:12px; padding:16px;
+          box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 6px 18px -12px rgba(0,0,0,.6);
+          transition:box-shadow .25s, transform .25s, border-color .5s; }
+  .card.pulse-flash { border-color:rgba(57,135,229,.55); }
+  .card h2 { margin:0 0 4px; font-size:11.5px; text-transform:uppercase;
+             letter-spacing:.09em; color:var(--muted); font-weight:700;
+             display:flex; justify-content:space-between; align-items:center; }
+  .card h2 .hint { font-weight:400; text-transform:none; letter-spacing:0; color:var(--muted); font-size:11px; }
+  .hgroup { display:flex; align-items:center; gap:8px; }
+  .empty { color:var(--muted); font-style:italic; }
+
+  button { background:var(--accent); color:#08121e; border:none; padding:8px 15px;
+           border-radius:7px; font-weight:700; font-size:12px; cursor:pointer;
+           transition:filter .15s, transform .15s; }
+  button:hover:not(:disabled) { filter:brightness(1.12); transform:translateY(-1px); }
+  button:disabled { background:var(--grid); color:var(--muted); cursor:not-allowed; }
+  .btn-reset { background:var(--reject-soft); color:var(--reject); border:1px solid rgba(208,59,59,.4); }
+  .btn-reset:hover:not(:disabled) { filter:none; background:rgba(208,59,59,.24); }
+  .btn-ghost { background:transparent; color:var(--muted); border:1px solid var(--grid);
+               padding:3px 9px; border-radius:6px; font-size:10.5px; font-weight:600; }
+  .btn-ghost:hover:not(:disabled) { color:var(--fg); border-color:#3d4a5f; filter:none; transform:none; }
+
+  /* skeleton loaders -- same "waiting for data" look as the main dashboard */
+  .skel { border-radius:6px; background:linear-gradient(100deg,var(--grid) 20%,#33415a 40%,var(--grid) 60%);
+          background-size:250% 100%; animation:shimmer 1.7s ease-in-out infinite; }
+  @keyframes shimmer { 0%{background-position:120% 0} 100%{background-position:-20% 0} }
+  .waiting-note { font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5; }
+
+  .readout-row { display:flex; align-items:baseline; gap:12px; margin-top:6px; }
+  .readout { font-size:52px; font-weight:800; letter-spacing:-.02em; line-height:1;
+             font-variant-numeric:tabular-nums; transition:color .3s; }
+  .readout.pulse { animation:valpulse .5s ease; }
+  @keyframes valpulse { 0%{ transform:scale(1.06); } 100%{ transform:scale(1); } }
+  .delta { font-size:13px; font-weight:600; color:var(--muted); white-space:nowrap; }
+  .readout-meta { font-size:11.5px; color:var(--muted); margin-top:2px; margin-bottom:12px; }
+  .sub-readout { font-size:12px; color:var(--muted); margin-top:2px; margin-bottom:12px; }
+  .live-chart-svg { width:100%; height:150px; display:block; }
+  .live-chart-svg circle.tip { transition:cx .5s cubic-bezier(.22,1,.36,1), cy .5s cubic-bezier(.22,1,.36,1); }
+
+  .liveblip { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
+  .liveblip.fresh { background:var(--good); animation:beat 1.4s ease-in-out infinite; }
+  .liveblip.stale { background:var(--marginal); }
+  .liveblip.dead { background:var(--reject); }
+  @keyframes beat { 0%,100%{ box-shadow:0 0 0 0 var(--good-soft);} 50%{ box-shadow:0 0 0 5px var(--good-soft);} }
+</style>
+</head>
+<body>
+<header>
+  <div class="titlerow">
+    <h1>ConcreSense</h1>
+    <span class="tag">Live sensors</span>
+  </div>
+  <div class="sub">Temperature (DS18B20) &amp; load cell (HX711) — updates the instant the device publishes, no polling delay beyond the websocket.</div>
+  <div class="note">
+    Load-cell value is the raw HX711 ADC count, not yet converted to a calibrated force/penetration
+    reading unless the main dashboard's classification shows a complete feature vector.
+  </div>
+  <div class="headerfoot">
+    <div class="student">
+      <a href="/" class="navback">← Main dashboard</a>
+      <span>Anbuchelvan &nbsp;·&nbsp; CSE A &nbsp;·&nbsp; 24CS0059</span>
+    </div>
+    <div class="statusstrip" id="statusstrip">
+      <span class="pill"><span class="pdot" id="hpMqtt"></span>mqtt <b id="hpMqttTxt">—</b></span>
+      <span class="pill"><span class="pdot" id="hpWs"></span>viewers <b id="hpWsTxt">—</b></span>
+      <span class="pill">tests received <b id="hpRecv">0</b></span>
+      <span class="pill">server up <b id="hpUptime">—</b></span>
+      <button id="resetBtn" class="btn-reset" style="padding:5px 12px">Reset dashboard</button>
+    </div>
+  </div>
+</header>
+
+<div class="livewrap">
+  <div class="card" id="tempCard">
+    <h2>Temperature <span class="hgroup"><span class="hint">DS18B20 · °C</span>
+      <button class="btn-ghost" id="tempClearBtn" title="Clears only this chart's local rolling window, not the server history">clear chart</button></span></h2>
+    <div id="tempBody">
+      <div class="skel" style="height:44px;width:150px;margin:10px 0 14px"></div>
+      <div class="skel" style="height:150px;border-radius:8px"></div>
+      <div class="waiting-note">Waiting for the device to publish a temperature reading over MQTT…</div>
+    </div>
+  </div>
+
+  <div class="card" id="loadCard">
+    <h2>Load cell <span class="hgroup"><span class="hint">HX711 · raw counts</span>
+      <button class="btn-ghost" id="loadClearBtn" title="Clears only this chart's local rolling window, not the server history">clear chart</button></span></h2>
+    <div id="loadBody">
+      <div class="skel" style="height:44px;width:190px;margin:10px 0 14px"></div>
+      <div class="skel" style="height:150px;border-radius:8px"></div>
+      <div class="waiting-note">Waiting for the device to publish a load-cell reading over MQTT…</div>
+    </div>
+  </div>
+
+  <div class="card" style="grid-column:1/-1">
+    <h2>Connection <span class="hint" id="connHint"></span></h2>
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)">
+      <span id="dot" class="liveblip"></span><span id="conn">connecting…</span>
+      <span style="margin-left:14px" class="liveblip" id="hb"></span><span id="hbTxt" class="empty">no data yet</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 1, unit = '') =>
+  (v === undefined || v === null || Number.isNaN(v)) ? '—' : Number(v).toFixed(d) + unit;
+
+const MAX_POINTS = 50; // ~4 min of rolling window at the firmware's 5s publish cadence
+
+const PANELS = {
+  temp: { key: 'temperature_c', label: 'Temperature', unit: ' °C', digits: 1,
+          hue: 'var(--accent)', hueHex: '#3987e5', series: [], built: false },
+  load: { key: 'load_counts', label: 'Load cell', unit: ' counts', digits: 0,
+          hue: 'var(--accent2)', hueHex: '#d95926', series: [], built: false },
+};
+
+let lastMsgAt = null; // real receipt time of the most recent record (any type)
+
+function pulseCard(el) {
+  if (!el) return;
+  el.classList.add('pulse-flash');
+  setTimeout(() => el.classList.remove('pulse-flash'), 700);
+}
+
+/* ------------------------------------------------------------ chart drawing
+   Same technique as the main dashboard's sparklines (area + line + endpoint
+   marker, one hue per series, no dual axis) but sized up as the primary
+   content of the page rather than a footnote, so it gets a light recessive
+   grid with min/mid/max labels for readability. Redrawn on every new point;
+   the endpoint marker's cx/cy are separately CSS-transitioned so the tip
+   visibly glides to its new position rather than jump-cutting. */
+function robustDomain(values) {
+  // Raw, uncalibrated sensor feeds (this HX711 in particular, mid-calibration)
+  // can throw one wild ADC glitch into an otherwise steady run. A plain
+  // min/max y-scale lets a single such point compress every other reading
+  // into an illegible sliver -- observed for real on this device's live feed.
+  // This only reshapes the CHART's zoom window; the big numeric readout above
+  // it always shows the true, unfiltered last value, never a filtered one.
+  if (values.length < 5) {
+    const lo = Math.min(...values), hi = Math.max(...values);
+    return hi > lo ? [lo, hi] : [lo - 1, hi + 1];
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const q = (p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
+  let lo = q(0.1), hi = q(0.9);
+  if (hi - lo < 1e-9) { lo = Math.min(...values); hi = Math.max(...values); }
+  if (hi - lo < 1e-9) { hi = lo + 1; }
+  const pad = (hi - lo) * 0.15;
+  return [lo - pad, hi + pad];
+}
+
+function chartSVG(values, hueHex) {
+  const W = 640, H = 150, padL = 40, padR = 12, padT = 12, padB = 12;
+  const innerW = W - padL - padR, innerH = H - padT - padB;
+  const [lo, hi] = robustDomain(values);
+  const denom = (hi - lo) || 1;
+  const clip = (y) => Math.max(padT, Math.min(padT + innerH, y));
+  const pts = values.map((v, i) => {
+    const x = padL + (values.length === 1 ? innerW : (i / (values.length - 1)) * innerW);
+    const y = clip(padT + innerH - ((v - lo) / denom) * innerH);
+    return [x, y];
+  });
+  const line = pts.length > 1
+    ? pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')
+    : '';
+  const last = pts[pts.length - 1];
+  const gridRows = [
+    { y: padT, v: hi }, { y: padT + innerH / 2, v: (hi + lo) / 2 }, { y: padT + innerH, v: lo },
+  ];
+  const grid = gridRows.map(g => `
+    <line x1="${padL}" y1="${g.y.toFixed(1)}" x2="${W - padR}" y2="${g.y.toFixed(1)}" stroke="var(--grid)" stroke-width="1" opacity=".55"/>
+    <text x="${padL - 6}" y="${(g.y + 3.5).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)">${g.v.toFixed(1)}</text>
+  `).join('');
+  let path = '';
+  if (pts.length > 1) {
+    const area = line + ` L${pts[pts.length - 1][0].toFixed(1)},${(padT + innerH).toFixed(1)}` +
+                 ` L${pts[0][0].toFixed(1)},${(padT + innerH).toFixed(1)} Z`;
+    path = `<path d="${area}" fill="${hueHex}" opacity=".12" stroke="none"/>
+      <path d="${line}" fill="none" stroke="${hueHex}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  const tip = `<circle class="tip" cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="5.5" fill="${hueHex}" stroke="var(--panel)" stroke-width="2"/>`;
+  return `<svg class="live-chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}${path}${tip}</svg>`;
+}
+
+/* --------------------------------------------------------------- panels */
+function buildPanelSkeletonHTML(p) {
+  return `
+    <div class="readout-row">
+      <div class="readout" id="${p._id}Val" style="color:${p.hue}">—${p.unit.trim()}</div>
+      <div class="delta" id="${p._id}Delta"></div>
+    </div>
+    <div class="readout-meta" id="${p._id}Meta">no data yet</div>
+    <div id="${p._id}ChartWrap"></div>`;
+}
+
+function ensureBuilt(id, p) {
+  p._id = id;
+  if (p.built) return;
+  $(id + 'Body').innerHTML = buildPanelSkeletonHTML(p);
+  p.built = true;
+}
+
+function renderPanel(id, p, r) {
+  ensureBuilt(id, p);
+  const raw = r.sensor_raw || {};
+  const v = raw[p.key];
+  if (v === undefined || v === null || Number.isNaN(v)) return; // this record didn't carry this sensor
+
+  const prev = p.series.length ? p.series[p.series.length - 1] : null;
+  p.series.push(v);
+  if (p.series.length > MAX_POINTS) p.series.shift();
+
+  const valEl = $(id + 'Val');
+  valEl.textContent = fmt(v, p.digits, p.unit);
+  valEl.classList.remove('pulse'); void valEl.offsetWidth; valEl.classList.add('pulse');
+
+  const deltaEl = $(id + 'Delta');
+  if (prev != null) {
+    const d = v - prev;
+    if (Math.abs(d) < Math.pow(10, -p.digits) / 2) deltaEl.innerHTML = '&#9644; steady';
+    else deltaEl.innerHTML = (d > 0 ? '&#9650; +' : '&#9660; ') + Math.abs(d).toFixed(p.digits) + p.unit;
+  } else {
+    deltaEl.textContent = '';
+  }
+
+  $(id + 'Meta').textContent =
+    `test #${r.seq ?? '?'} · ${(r.timestamp_utc || '').replace('T', ' ').replace('Z', '')} · device ${r.device_id ?? '?'}`;
+
+  $(id + 'ChartWrap').innerHTML = chartSVG(p.series, p.hueHex);
+  pulseCard($(id === 'temp' ? 'tempCard' : 'loadCard'));
+}
+
+function resetPanel(id, p) {
+  p.series = [];
+  p.built = false;
+  $(id + 'Body').innerHTML =
+    `<div class="skel" style="height:44px;width:${id === 'temp' ? 150 : 190}px;margin:10px 0 14px"></div>
+     <div class="skel" style="height:150px;border-radius:8px"></div>
+     <div class="waiting-note">Waiting for the device to publish a ${p.label.toLowerCase()} reading over MQTT…</div>`;
+}
+
+$('tempClearBtn').addEventListener('click', () => resetPanel('temp', PANELS.temp));
+$('loadClearBtn').addEventListener('click', () => resetPanel('load', PANELS.load));
+
+/* --------------------------------------------------------------- record in */
+function handleRecord(r) {
+  lastMsgAt = new Date();
+  renderPanel('temp', PANELS.temp, r);
+  renderPanel('load', PANELS.load, r);
+}
+
+/* ------------------------------------------------------------ global reset
+   Server-side history/lastRecord were cleared (POST /api/reset from either
+   page, or a click on this page's own button). Both charts go back to their
+   exact initial waiting state -- they will repopulate on their own from the
+   next continuing publish. */
+function resetClientState() {
+  resetPanel('temp', PANELS.temp);
+  resetPanel('load', PANELS.load);
+  lastMsgAt = null;
+  tickHeartbeat();
+}
+
+/* --------------------------------------------------------- live heartbeat */
+function tickHeartbeat() {
+  const hb = $('hb'), txt = $('hbTxt');
+  if (!lastMsgAt) { hb.className = 'liveblip'; txt.className = 'empty'; txt.textContent = 'no data yet'; return; }
+  const secs = Math.floor((Date.now() - lastMsgAt.getTime()) / 1000);
+  txt.className = '';
+  if (secs < 15) { hb.className = 'liveblip fresh'; txt.textContent = secs <= 1 ? 'just now' : `${secs}s ago`; }
+  else if (secs < 60) { hb.className = 'liveblip stale'; txt.textContent = `${secs}s ago`; }
+  else { hb.className = 'liveblip dead'; txt.textContent = `${Math.floor(secs / 60)}m ago (stalled?)`; }
+}
+setInterval(tickHeartbeat, 1000);
+
+/* ----------------------------------------------------------- health poll
+   Identical pattern to the main dashboard -- same /api/health shape, same
+   pill IDs, so this page's status strip always agrees with the main one. */
+function fmtUptime(startedAt) {
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+async function pollHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    $('hpMqtt').className = 'pdot ' + (d.mqtt_connected ? 'up' : 'down');
+    $('hpMqttTxt').textContent = d.mqtt_connected ? (d.embedded_broker ? 'embedded' : 'external') : 'down';
+    $('hpWs').className = 'pdot ' + (d.websocket_clients > 0 ? 'up' : '');
+    $('hpWsTxt').textContent = d.websocket_clients ?? 0;
+    $('hpRecv').textContent = d.received ?? 0;
+    $('hpUptime').textContent = fmtUptime(d.startedAt);
+  } catch (e) {
+    $('hpMqttTxt').textContent = 'unreachable';
+  }
+}
+pollHealth();
+setInterval(pollHealth, 4000);
+
+/* ------------------------------------------------------------------- ws
+   Same /ws stream and {type:'record'|'reset'} envelope the main dashboard
+   uses -- one server, one wire format, two views on it. */
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => { $('dot').className = 'liveblip fresh'; $('conn').textContent = 'live'; };
+  ws.onclose = () => {
+    $('dot').className = 'liveblip dead';
+    $('conn').textContent = 'disconnected — retrying…';
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'record') handleRecord(msg.data);
+    else if (msg.type === 'reset') resetClientState();
+  };
+}
+
+$('resetBtn').addEventListener('click', async () => {
+  if (!confirm('Reset the dashboard? This clears all recorded tests on the server (both this page and the main dashboard) so a fresh demo run starts clean. Cannot be undone.')) return;
+  $('resetBtn').disabled = true;
+  try {
+    const r = await fetch('/api/reset', { method: 'POST' });
+    await r.json();
+    resetClientState();
+  } catch (e) {
+    alert('Reset failed: ' + e.message);
+  } finally {
+    $('resetBtn').disabled = false;
+  }
+});
+
+tickHeartbeat();
+
+// Seed from the last few history records so a freshly-opened tab is not
+// blank while waiting for the next 5s publish.
+fetch('/api/history?limit=' + MAX_POINTS).then(r => r.json())
+  .then(d => { if (d.data && d.data.length) d.data.forEach(handleRecord); })
+  .catch(() => {});
+
+connect();
+</script>
+</body>
+</html>

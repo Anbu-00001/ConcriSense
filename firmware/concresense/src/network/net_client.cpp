@@ -203,6 +203,11 @@ bool publish(const MeasurementRecord& rec, const Inference& inf,
   doc["time_source"] = gTimeSynced ? "ntp" : "unsynced";
 
   JsonObject loc = doc["location"].to<JsonObject>();
+  // Real telemetry even without a fix -- the NEO-6M reports satellites in
+  // view (GPGSV) well before it can lock a position, so "no fix" indoors is
+  // not silence, it is live search progress.
+  loc["satellites_in_view"] = rec.gps.satellitesInView;
+  loc["search_elapsed_s"] = rec.gps.searchElapsedMs / 1000;
   if (rec.gps.valid) {
     loc["latitude"] = rec.gps.latitude;
     loc["longitude"] = rec.gps.longitude;

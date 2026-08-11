@@ -506,7 +506,30 @@ function renderTrends() {
    and the card says so, rather than showing a blank grey box. */
 let map = null, markerLayer = null, tileErrors = 0, plotted = 0;
 let presenterMarker = null;   // browser-geolocation pin -- distinct from device pins, opt-in only
+let presenterAccuracyCircle = null;  // real accuracy radius (m) around the presenter pin
+let geoWatchId = null;        // active navigator.geolocation.watchPosition() id, or null
 let latestHasFix = false;     // tracks whether the current device record has a real GPS fix
+
+// Real device-side GPS telemetry, even without a fix: the NEO-6M reports
+// satellites in view (GPGSV) well before it can lock a position, so "no fix"
+// indoors is live search progress, not silence.
+function gpsHint(loc) {
+  if (!loc) {
+    return 'GPS pins appear once a test is published with a satellite fix. '
+      + 'The NEO-6M cannot acquire a fix indoors.';
+  }
+  if (loc.fix) return 'Latest test has a real device GPS fix, plotted above.';
+  if (loc.satellites_in_view != null && loc.search_elapsed_s != null) {
+    const mm = Math.floor(loc.search_elapsed_s / 60), ss = loc.search_elapsed_s % 60;
+    const satsTxt = loc.satellites_in_view > 0
+      ? `tracking ${loc.satellites_in_view} satellite${loc.satellites_in_view===1?'':'s'} in view, no lock yet`
+      : 'no satellites in view yet';
+    return `Device NEO-6M: still searching — ${satsTxt}, ${mm}m ${ss}s since power-on. `
+      + `Real GPS telemetry; the module cannot lock a fix indoors.`;
+  }
+  return `GPS pins appear once a test is published with a satellite fix. The NEO-6M cannot acquire `
+    + `a fix indoors (reason: ${loc.reason || 'no_gps_fix'}).`;
+}
 
 function initMap() {
   map = L.map('map', { attributionControl: true, zoomControl: true })
@@ -556,33 +579,83 @@ function addPin(rec) {
    never be triggered automatically. */
 function clearPresenterPin() {
   if (presenterMarker) { markerLayer.removeLayer(presenterMarker); presenterMarker = null; }
+  if (presenterAccuracyCircle) { markerLayer.removeLayer(presenterAccuracyCircle); presenterAccuracyCircle = null; }
+}
+
+// Continuous watchPosition rather than a single snapshot: a real GPS "blue
+// dot" moves and its accuracy radius shrinks/grows as the OS refines its
+// estimate, and a static one-shot pin undersells what real geolocation
+// actually looks like. speed/heading/altitude are only shown when the
+// browser itself reports them (null on a stationary laptop) -- never
+// estimated, interpolated, or defaulted.
+function stopMyLocation() {
+  if (geoWatchId != null) { navigator.geolocation.clearWatch(geoWatchId); geoWatchId = null; }
+  clearPresenterPin();
+  $('geoBtn').textContent = 'Show my location instead (browser GPS)';
+  $('geoBtn').disabled = false;
+  $('geoStatus').textContent =
+    "Opt-in only — uses this laptop's browser location, not the ESP32's GPS. Plotted with a " +
+    'distinct purple marker, clearly labeled, never merged with device readings.';
 }
 
 function useMyLocation() {
+  if (geoWatchId != null) { stopMyLocation(); return; }  // toggle off
+
   if (!('geolocation' in navigator)) {
     $('geoStatus').innerHTML = '<b style="color:var(--reject)">Geolocation is not available in this browser.</b>';
     return;
   }
   $('geoBtn').disabled = true;
   $('geoStatus').textContent = 'Requesting browser location… (your browser will prompt for permission)';
-  navigator.geolocation.getCurrentPosition(
+
+  // Safety net: browsers do not always honor the PositionOptions timeout
+  // below once a permission prompt is left unanswered (observed directly in
+  // headless Chrome with no location provider -- the position callback can
+  // hang past its own 10s timeout with neither callback ever firing). Without
+  // this, a dismissed/ignored permission prompt during a live demo would
+  // strand the button disabled forever with no way to retry.
+  let settled = false;
+  const watchdog = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    if (geoWatchId != null) { navigator.geolocation.clearWatch(geoWatchId); geoWatchId = null; }
+    $('geoStatus').innerHTML = '<b style="color:var(--marginal)">No response from the browser\'s location prompt.</b> '
+      + 'If a permission popup appeared, answer it; otherwise check your browser\'s site settings. Click to try again.';
+    $('geoBtn').disabled = false;
+  }, 12000);
+
+  let firstFix = true;
+  geoWatchId = navigator.geolocation.watchPosition(
     (pos) => {
-      const { latitude, longitude, accuracy } = pos.coords;
+      if (!settled) { settled = true; clearTimeout(watchdog); }
+      const { latitude, longitude, accuracy, speed, heading, altitude } = pos.coords;
       clearPresenterPin();
+      presenterAccuracyCircle = L.circle([latitude, longitude], {
+        radius: accuracy, color: '#c084fc', fillColor: '#c084fc', fillOpacity: .12, weight: 1,
+      }).addTo(markerLayer);
       presenterMarker = L.marker([latitude, longitude], {
         icon: L.divIcon({ className: 'presenter-pin', iconSize: [16, 16], iconAnchor: [8, 16] }),
-      }).bindPopup(
+      }).addTo(markerLayer);
+      const extra = [
+        speed != null && `speed ${(speed*3.6).toFixed(1)} km/h`,
+        heading != null && `heading ${Math.round(heading)}°`,
+        altitude != null && `alt ${Math.round(altitude)} m`,
+      ].filter(Boolean).join(' · ');
+      presenterMarker.bindPopup(
         `<b>Presenter's laptop location</b><br>(browser geolocation — NOT the device's GPS fix)`
-        + `<br><small>±${Math.round(accuracy)} m accuracy</small>`
-      ).addTo(markerLayer);
-      presenterMarker.openPopup();
-      map.setView([latitude, longitude], 15);
-      $('geoStatus').innerHTML =
-        '<b style="color:#c084fc">● Showing presenter\'s laptop location (browser GPS)</b> — '
-        + 'not the device\'s GPS fix. Purple marker only.';
+        + `<br><small>±${Math.round(accuracy)} m accuracy${extra ? '<br>' + extra : ''}</small>`
+      );
+      if (firstFix) { map.setView([latitude, longitude], 15); firstFix = false; }
+      $('geoBtn').textContent = 'Stop live location (browser GPS)';
       $('geoBtn').disabled = false;
+      $('geoStatus').innerHTML =
+        `<b style="color:#c084fc">● Live: presenter's laptop location (browser GPS)</b> — `
+        + `±${Math.round(accuracy)} m${extra ? ', ' + extra : ''}. Updates continuously; not the device's GPS fix.`;
     },
     (err) => {
+      if (!settled) { settled = true; clearTimeout(watchdog); }
+      if (geoWatchId != null) { navigator.geolocation.clearWatch(geoWatchId); geoWatchId = null; }
+      clearPresenterPin();
       const reasons = {
         1: 'Location permission denied.',
         2: 'Position unavailable (no location provider on this machine/browser).',
@@ -592,6 +665,7 @@ function useMyLocation() {
         + (reasons[err.code] || ('Could not get location: ' + err.message))
         + '</b> Geolocation needs a secure context (HTTPS, or the browser\'s localhost exception) '
         + 'and OS-level location permission for the browser.';
+      $('geoBtn').textContent = 'Show my location instead (browser GPS)';
       $('geoBtn').disabled = false;
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -659,14 +733,13 @@ function render(r) {
     row('yield stress τ₀', fmt(f.yield_stress_pa,0,' Pa')) +
     row('dominant freq', fmt(f.vib_dominant_hz,2,' Hz')) +
     row('spectral entropy', fmt(f.vib_spectral_entropy,3)) +
-    row('GPS fix', (r.location && r.location.fix) ? 'yes' : 'no (indoor)');
+    row('GPS fix', (r.location && r.location.fix) ? 'yes'
+      : `no — ${(r.location && r.location.satellites_in_view) ?? 0} sat(s) in view, ` +
+        `${(r.location && r.location.search_elapsed_s) ?? 0}s searching`);
 
   addPin(r);
   latestHasFix = !!(r.location && r.location.fix);
-  $('mapHint').textContent = latestHasFix
-    ? 'Latest test has a real device GPS fix, plotted above.'
-    : `GPS pins appear once a test is published with a satellite fix. The NEO-6M cannot acquire ` +
-      `a fix indoors (reason: ${(r.location && r.location.reason) || 'no_gps_fix'}).`;
+  $('mapHint').textContent = gpsHint(r.location);
   $('pdfBtn').disabled = false;
 
   history.unshift(r);
@@ -736,12 +809,9 @@ function resetClientState() {
   if (markerLayer) markerLayer.clearLayers();
   plotted = 0;
   latestHasFix = false;
-  clearPresenterPin();
+  stopMyLocation();
   $('mapState').textContent = '';
-  $('mapHint').textContent = 'GPS pins appear once a test is published with a satellite fix. The NEO-6M cannot acquire a fix indoors.';
-  $('geoStatus').textContent =
-    "Opt-in only — uses this laptop's browser location, not the ESP32's GPS. Plotted with a " +
-    'distinct purple marker, clearly labeled, never merged with device readings.';
+  $('mapHint').textContent = gpsHint(null);
 
   tickHeartbeat();
 }

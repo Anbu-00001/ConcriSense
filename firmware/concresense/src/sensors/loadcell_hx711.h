@@ -42,5 +42,13 @@ class LoadCellHX711 {
   float scale_ = 1.0f;
   SensorStatus status_ = SensorStatus::ABSENT;
 
+  // Plausibility baseline for read(): an intermittent DT/SCK connection can
+  // corrupt enough of a median-of-5 to produce a physically impossible jump
+  // (see HX711_MAX_PLAUSIBLE_JUMP in config.h). Tracked separately from
+  // status_ because the fault is transient and self-clearing, not a
+  // permanent "wire fell off" condition.
+  float lastGood_ = 0.0f;
+  bool hasLastGood_ = false;
+
   bool waitReady(uint32_t timeoutMs);
 };

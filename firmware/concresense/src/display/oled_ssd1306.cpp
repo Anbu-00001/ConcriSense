@@ -1,6 +1,7 @@
 #include "oled_ssd1306.h"
 
 #include <Wire.h>
+#include <math.h>
 
 #include "../config.h"
 
@@ -179,6 +180,51 @@ void OledDisplay::showLiveReadings(float tempC, bool tempValid,
   } else {
     d_->print(F("--"));
   }
+
+  d_->display();
+}
+
+void OledDisplay::showGpsSearching(uint8_t satsInView, uint32_t elapsedMs) {
+  if (status_ != SensorStatus::OK) return;
+  d_->clearDisplay();
+
+  d_->setTextSize(1);
+  d_->setCursor(0, 0);
+  d_->print(F("GPS SEARCHING"));
+  if ((millis() / 500) % 2 == 0) d_->fillCircle(124, 3, 2, SSD1306_WHITE);
+  d_->drawLine(0, 9, 127, 9, SSD1306_WHITE);
+
+  // Radar sweep -- a generic "searching" motif, not a sky plot: per-satellite
+  // azimuth/elevation is not parsed, so no fabricated bearing is ever drawn.
+  // The sweep angle is driven by real millis(), so it visibly moves while
+  // waiting instead of sitting static.
+  const int16_t cx = 22, cy = 41, r = 18;
+  d_->drawCircle(cx, cy, r, SSD1306_WHITE);
+  d_->drawCircle(cx, cy, r * 2 / 3, SSD1306_WHITE);
+  d_->drawCircle(cx, cy, r / 3, SSD1306_WHITE);
+  const float angle = (millis() % 2400) / 2400.0f * 2.0f * (float)PI;
+  const int16_t ex = cx + (int16_t)(r * cosf(angle));
+  const int16_t ey = cy + (int16_t)(r * sinf(angle));
+  d_->drawLine(cx, cy, ex, ey, SSD1306_WHITE);
+
+  // Real numbers, right side: GPGSV satellite-in-view count and elapsed
+  // search time, both genuine telemetry from the module.
+  d_->setTextSize(1);
+  d_->setCursor(50, 16);
+  d_->print(F("sats in view"));
+  d_->setTextSize(2);
+  d_->setCursor(50, 26);
+  d_->print(satsInView);
+
+  d_->setTextSize(1);
+  d_->setCursor(50, 46);
+  d_->print(F("searching"));
+  d_->setCursor(50, 55);
+  char e[16];
+  const uint32_t s = elapsedMs / 1000;
+  snprintf(e, sizeof(e), "%lum%02lus", (unsigned long)(s / 60),
+           (unsigned long)(s % 60));
+  d_->print(e);
 
   d_->display();
 }

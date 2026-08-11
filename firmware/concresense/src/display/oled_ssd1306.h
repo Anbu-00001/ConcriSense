@@ -35,6 +35,14 @@ class OledDisplay {
   void showLiveReadings(float tempC, bool tempValid, float loadCounts,
                         bool loadValid);
 
+  // Live "searching" view for the fix-not-yet-acquired state -- the normal
+  // indoor case, not an error. satsInView is real GPGSV telemetry (satellites
+  // the module can see, reported well before a fix locks); elapsedMs is real
+  // time since the GPS module started searching. No fabricated position or
+  // bearing is drawn -- the radar sweep is a generic "searching" motif, not a
+  // sky plot, since per-satellite azimuth/elevation is not parsed.
+  void showGpsSearching(uint8_t satsInView, uint32_t elapsedMs);
+
   SensorStatus status() const { return status_; }
 
  private:

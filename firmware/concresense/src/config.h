@@ -76,6 +76,18 @@
 // Placeholder — overwritten by the tare/calibration routine in Phase 2.
 #define HX711_DEFAULT_SCALE 1.0f
 
+// Plausibility ceiling for read(), in raw counts against the last accepted
+// reading. Measured empirically on this board over ~7 minutes of live
+// auto-measure: normal cycle-to-cycle noise is tens of counts, while an
+// intermittent DT/SCK connection corrupting a median-of-5 produces jumps of
+// 8000+ counts that always drift back toward the SAME baseline afterward
+// rather than settling on a new one -- the signature of a bad connection,
+// not a real applied force. No load-cell calibration exists yet (see
+// loadAnchors.calibrated), so there is no legitimate use of a huge
+// single-cycle jump today; revisit this once real penetration-force tests
+// begin, since a fast real plunger press could then trip the same gate.
+#define HX711_MAX_PLAUSIBLE_JUMP 6000.0f
+
 // ---------------------------------------------------------------- IMU
 #define IMU_SAMPLE_RATE_HZ 200
 #define IMU_BURST_SAMPLES 256  // power of two, required by the radix-2 FFT

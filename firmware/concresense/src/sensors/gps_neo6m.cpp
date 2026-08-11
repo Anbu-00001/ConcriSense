@@ -4,6 +4,8 @@
 
 SensorStatus GpsNeo6M::begin(uint32_t detectTimeoutMs) {
   Serial2.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+  gsvSatsInView_.begin(gps_, "GPGSV", 3);
+  beginMs_ = millis();
 
   // Presence is decided purely on whether NMEA bytes arrive, never on whether a
   // fix is acquired. The module talks immediately on power-up even with no sky
@@ -35,6 +37,8 @@ GpsFix GpsNeo6M::fix() {
 
   f.satellites = gps_.satellites.isValid() ? gps_.satellites.value() : 0;
   f.hdop = gps_.hdop.isValid() ? gps_.hdop.hdop() : 0.0f;
+  f.satellitesInView = gsvSatsInView_.isValid() ? atoi(gsvSatsInView_.value()) : 0;
+  f.searchElapsedMs = millis() - beginMs_;
 
   if (gps_.location.isValid()) {
     f.latitude = gps_.location.lat();

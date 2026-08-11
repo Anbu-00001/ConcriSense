@@ -10,6 +10,13 @@ struct GpsFix {
   uint8_t satellites = 0;
   bool valid = false;      // a real 3D fix with plausible HDOP
   char isoTime[25] = "";   // UTC, ISO-8601
+
+  // Real telemetry that exists even with no fix: the NEO-6M reports GPGSV
+  // (satellites in view/tracked) the moment it sees any sky at all, well
+  // before it can lock a usable position. Indoors this is usually 0, but
+  // near a window it is often 2-4 -- true signal, not a fabricated number.
+  uint8_t satellitesInView = 0;
+  uint32_t searchElapsedMs = 0;  // time since the module started searching
 };
 
 // NEO-6M on hardware UART2.
@@ -40,6 +47,8 @@ class GpsNeo6M {
 
  private:
   TinyGPSPlus gps_;
+  TinyGPSCustom gsvSatsInView_;  // GPGSV field 3: total satellites in view
+  uint32_t beginMs_ = 0;
   bool sawNmea_ = false;
   SensorStatus status_ = SensorStatus::ABSENT;
 };

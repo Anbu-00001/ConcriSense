@@ -111,6 +111,9 @@ SensorStatus LoadCellHX711::tare(uint8_t samples) {
   }
   offset_ = median;
   status_ = SensorStatus::OK;
+  // The zero point just moved -- any previously-accepted baseline is stale
+  // and would make the very next read() look like a false jump.
+  hasLastGood_ = false;
   return status_;
 }
 
@@ -131,7 +134,21 @@ Reading LoadCellHX711::read() {
     return r;
   }
 
-  r.value = static_cast<float>(raw - offset_) / scale_;
+  const float value = static_cast<float>(raw - offset_) / scale_;
+
+  // A median-of-5 still gets overwhelmed when an intermittent DT/SCK
+  // connection corrupts most of the 5 conversions in the same ~500ms window.
+  // Reject a jump this large as OUT_OF_RANGE for this cycle only -- not
+  // latched into status_, since the fault self-clears -- rather than publish
+  // a number a load cell cannot physically produce in one 5s interval.
+  if (hasLastGood_ && fabsf(value - lastGood_) > HX711_MAX_PLAUSIBLE_JUMP) {
+    r.status = SensorStatus::OUT_OF_RANGE;
+    return r;
+  }
+
+  lastGood_ = value;
+  hasLastGood_ = true;
+  r.value = value;
   r.status = SensorStatus::OK;
   return r;
 }
