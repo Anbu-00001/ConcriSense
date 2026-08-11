@@ -74,11 +74,14 @@ function generateReport({ records, meta }, out) {
   doc.fontSize(20).fillColor(COLORS.ink).text('ConcreSense', 50, 50);
   doc.fontSize(10).fillColor(COLORS.muted)
      .text('On-site fresh-concrete screening report', 50, 74);
+  // width widened to 185 (was 145): at 9pt the "Generated ... UTC" string
+  // exceeds 145pt and wraps to a second line, which then overlaps the
+  // "Reference standard" line 14pt below it.
   doc.fontSize(9).fillColor(COLORS.muted)
      .text(`Generated ${new Date().toISOString().replace('T', ' ').replace(/\..*/, '')} UTC`,
-           400, 52, { width: 145, align: 'right' })
-     .text(`Reference standard: IS 456:2000`, 400, 66,
-           { width: 145, align: 'right' });
+           360, 52, { width: 185, align: 'right', lineBreak: false })
+     .text(`Reference standard: IS 456:2000`, 360, 66,
+           { width: 185, align: 'right', lineBreak: false });
 
   hr(doc, 96);
 
@@ -119,7 +122,42 @@ function generateReport({ records, meta }, out) {
     y += 14;
   }
 
-  y += 8;
+  // Verdict distribution across the whole report (not just the latest test),
+  // computed the same way as the dashboard's /api/summary so the two never
+  // disagree. A tiny inline bar chart -- real counts, not decoration.
+  {
+    const counts = { GOOD: 0, MARGINAL: 0, REJECT: 0, UNKNOWN: 0 };
+    let disagreements = 0;
+    for (const r of records) {
+      const c = r.classification || {};
+      const v = c.rule_result || 'UNKNOWN';
+      if (counts[v] !== undefined) counts[v]++;
+      if (c.agreement === false) disagreements++;
+    }
+    const agreeN = records.length - disagreements;
+    const agreePct = records.length ? Math.round((100 * agreeN) / records.length) : 0;
+
+    doc.fillColor(COLORS.muted).fontSize(9).text('Verdict distribution', 50, y + 10, { width: 140 });
+    const maxC = Math.max(1, counts.GOOD, counts.MARGINAL, counts.REJECT);
+    const baseY = y + 40, barW = 14, slot = 52, x0 = 195, maxH = 26;
+    ['GOOD', 'MARGINAL', 'REJECT'].forEach((k, i) => {
+      const h = counts[k] > 0 ? Math.max(3, (counts[k] / maxC) * maxH) : 0;
+      const x = x0 + i * slot;
+      if (h > 0) doc.roundedRect(x, baseY - h, barW, h, 2).fillColor(COLORS[k]).fill();
+      doc.fontSize(7.5).fillColor(COLORS.ink)
+         .text(String(counts[k]), x - 10, baseY - Math.max(h, 3) - 10, { width: barW + 20, align: 'center' });
+      // Label box wider than the slot spacing on purpose (centered text,
+      // not a border) -- "MARGINAL" at 6.5pt needs ~30pt and must not wrap.
+      doc.fontSize(6.5).fillColor(COLORS.muted)
+         .text(k, x - 18, baseY + 3, { width: barW + 36, align: 'center', lineBreak: false });
+    });
+    // "<->" rather than "↔": PDFKit's base Helvetica (WinAnsi encoding) has
+    // no glyph for U+2194 and silently prints garbage ("!”") instead.
+    doc.fontSize(8.5).fillColor(COLORS.muted)
+       .text(`Model <-> rules agreement: ${agreeN}/${records.length} (${agreePct}%)`, 355, y + 12, { width: 190 });
+    y += 54;
+  }
+
   hr(doc, y);
   y += 14;
 

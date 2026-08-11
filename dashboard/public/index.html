@@ -522,7 +522,22 @@ function addPin(rec) {
 }
 
 /* --------------------------------------------------------------- render */
+// The server replays its lastRecord to every newly-opened websocket
+// connection (so a page connecting mid-gap isn't blank), AND the client
+// separately seeds itself from /api/history on load -- so the newest record
+// arrives twice on a fresh page load, in EITHER order depending on which of
+// the WS handshake / REST round-trip wins the race. A single-slot "was this
+// the last thing I rendered" guard only catches the case where the two
+// arrive back-to-back; when the WS replay wins the race and the history
+// fetch's own forEach then walks through older records afterwards, those
+// intermediate renders evict the remembered key before the loop reaches the
+// actual duplicate. Checking membership against the (already-capped)
+// `history` buffer catches it regardless of arrival order.
+const recKey = (r) => `${r.device_id ?? ''}#${r.seq ?? ''}#${r.timestamp_utc ?? ''}`;
 function render(r) {
+  const key = recKey(r);
+  if (history.some(h => recKey(h) === key)) return;
+
   const cls = r.classification || {}, f = r.features || {}, raw = r.sensor_raw || {};
 
   lastMsgAt = new Date();

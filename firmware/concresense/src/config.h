@@ -67,7 +67,9 @@
 // Datasheet constraint: holding SCK high for >60us puts the HX711 into power
 // down mode. Under FreeRTOS a task switch mid-read does exactly that, which is
 // why the read is wrapped in a portMUX critical section.
-#define HX711_READ_TIMEOUT_MS 200
+#define HX711_READ_TIMEOUT_MS 600  // widened from 200: the post-reset settle
+                                   // to the first ready conversion sometimes
+                                   // ran close to the old margin on this board
 #define HX711_SCK_SETTLE_US 1  // ESP32 at 240MHz toggles faster than the
                                // HX711's minimum clock high/low time
 
