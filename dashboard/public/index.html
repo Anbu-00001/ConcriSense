@@ -8,28 +8,62 @@
      dashboard loads with no internet. Only the map TILES need the network. -->
 <link rel="stylesheet" href="/vendor/leaflet.css">
 <style>
+  /* Status colors are the dataviz skill's fixed, validated status palette
+     (dark steps), checked with scripts/validate_palette.js against this
+     panel's actual surface (#1a212c): CVD ΔE 11.3, normal-vision ΔE 27.6,
+     contrast >=3:1 on all three. --accent is the skill's dark categorical
+     slot-1 blue; --accent2 is slot-2 orange, used only for the second
+     sparkline series so two single-hue trends never collide. */
   :root {
-    --bg:#11151c; --panel:#1a212c; --grid:#2a3444; --fg:#e6edf3;
-    --muted:#8b98a9; --accent:#4aa3ff;
-    --good:#3fb950; --marginal:#d29922; --reject:#f85149;
+    --bg:#11151c; --panel:#1a212c; --panel-hi:#1f2836; --grid:#2a3444; --fg:#e6edf3;
+    --muted:#8b98a9; --accent:#3987e5; --accent2:#d95926;
+    --good:#0ca30c; --marginal:#fab219; --reject:#d03b3b;
+    --good-soft:rgba(12,163,12,.14); --marginal-soft:rgba(250,178,25,.14); --reject-soft:rgba(208,59,59,.14);
   }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:18px 24px 10px; }
-  h1 { margin:0; font-size:24px; letter-spacing:-.02em; }
-  .sub { color:var(--muted); font-size:13px; margin-top:2px; }
-  .note { color:var(--marginal); font-size:12px; font-style:italic; margin-top:8px; }
-  .student { color:var(--muted); font-size:12px; margin-top:6px; padding-top:6px;
-             border-top:1px solid var(--grid); display:inline-block; }
-  .wrap { padding:0 24px 28px; display:grid; gap:16px;
+  body { margin:0; background:
+           radial-gradient(1100px 480px at 15% -10%, #16202f 0%, var(--bg) 55%) fixed;
+         color:var(--fg);
+         font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:20px 26px 8px; position:relative; }
+  header::after { content:""; position:absolute; left:26px; right:26px; bottom:0;
+                  height:1px; background:linear-gradient(90deg,var(--grid),transparent 85%); }
+  .titlerow { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:25px; font-weight:800; letter-spacing:-.03em;
+       background:linear-gradient(90deg,#f2f6fb,#9db8dd 130%);
+       -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tag { font-size:10.5px; font-weight:700; letter-spacing:.06em; color:var(--accent);
+         border:1px solid rgba(57,135,229,.4); background:rgba(57,135,229,.1);
+         border-radius:20px; padding:2px 9px; text-transform:uppercase; }
+  .sub { color:var(--muted); font-size:13px; margin-top:3px; }
+  .note { color:var(--marginal); font-size:11.5px; margin-top:9px; max-width:64ch;
+          padding:6px 10px; background:var(--marginal-soft); border-radius:6px;
+          border:1px solid rgba(250,178,25,.25); }
+  .headerfoot { display:flex; align-items:center; justify-content:space-between;
+                flex-wrap:wrap; gap:10px; margin-top:12px; padding-bottom:14px; }
+  .student { color:var(--muted); font-size:11.5px; }
+  .statusstrip { display:flex; gap:8px; flex-wrap:wrap; }
+  .pill { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
+          background:var(--panel); border:1px solid var(--grid); border-radius:20px;
+          padding:4px 10px 4px 8px; }
+  .pill b { color:var(--fg); font-weight:600; }
+  .pill .pdot { width:7px; height:7px; border-radius:50%; background:var(--muted); flex:none; }
+  .pill .pdot.up { background:var(--good); box-shadow:0 0 0 3px var(--good-soft); }
+  .pill .pdot.down { background:var(--reject); }
+
+  .wrap { padding:6px 26px 32px; display:grid; gap:16px;
           grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); }
-  .card { background:var(--panel); border:1px solid var(--grid);
-          border-radius:10px; padding:16px; }
-  .card h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase;
-             letter-spacing:.08em; color:var(--muted); font-weight:600;
+  .card { background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+          border:1px solid var(--grid); border-radius:12px; padding:16px;
+          box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 6px 18px -12px rgba(0,0,0,.6);
+          transition:box-shadow .25s, transform .25s, border-color .5s; }
+  .card:hover { box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 10px 26px -12px rgba(0,0,0,.7); }
+  .card.pulse-flash { border-color:rgba(57,135,229,.55); }
+  .card h2 { margin:0 0 12px; font-size:11.5px; text-transform:uppercase;
+             letter-spacing:.09em; color:var(--muted); font-weight:700;
              display:flex; justify-content:space-between; align-items:center; }
-  .verdict { font-size:40px; font-weight:700; letter-spacing:-.02em; }
+  .card h2 .hint { font-weight:400; text-transform:none; letter-spacing:0; color:var(--muted); font-size:11px; }
+  .verdict { font-size:42px; font-weight:800; letter-spacing:-.02em; line-height:1; }
   .verdict.GOOD{color:var(--good)} .verdict.MARGINAL{color:var(--marginal)}
   .verdict.REJECT{color:var(--reject)} .verdict.UNKNOWN{color:var(--muted)}
   .kv { display:flex; justify-content:space-between; padding:5px 0;
@@ -38,25 +72,73 @@
   .kv span:first-child{color:var(--muted)}
   .kv span:last-child{font-variant-numeric:tabular-nums}
   .status { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--reject); }
-  .dot.on { background:var(--good); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--reject); flex:none; }
+  .dot.on { background:var(--good); box-shadow:0 0 0 3px var(--good-soft); }
+  .hb { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:none; }
+  .hb.fresh { background:var(--good); animation:beat 1.4s ease-in-out infinite; }
+  .hb.stale { background:var(--marginal); }
+  .hb.dead { background:var(--reject); }
+  @keyframes beat { 0%,100%{ box-shadow:0 0 0 0 var(--good-soft);} 50%{ box-shadow:0 0 0 5px var(--good-soft);} }
   .empty { color:var(--muted); font-style:italic; }
   table { width:100%; border-collapse:collapse; font-size:12px; }
   th,td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--grid);
           font-variant-numeric:tabular-nums; }
-  th { color:var(--muted); font-weight:600; }
+  th { color:var(--muted); font-weight:600; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; }
+  tbody tr { transition:background .2s; }
+  tbody tr:hover { background:rgba(255,255,255,.02); }
   .warn { color:var(--marginal); font-size:12px; margin-top:8px; }
-  button { background:var(--accent); color:#08121e; border:none; padding:7px 14px;
-           border-radius:6px; font-weight:600; font-size:12px; cursor:pointer; }
-  button:hover { filter:brightness(1.1); }
+  .badge { font-size:9.5px; font-weight:700; letter-spacing:.04em; padding:2px 6px;
+           border-radius:4px; text-transform:uppercase; }
+  .badge.SIM { color:var(--marginal); background:var(--marginal-soft); border:1px solid rgba(250,178,25,.3); }
+  .badge.DEV { color:var(--good); background:var(--good-soft); border:1px solid rgba(12,163,12,.3); }
+  button { background:var(--accent); color:#08121e; border:none; padding:8px 15px;
+           border-radius:7px; font-weight:700; font-size:12px; cursor:pointer;
+           transition:filter .15s, transform .15s; }
+  button:hover:not(:disabled) { filter:brightness(1.12); transform:translateY(-1px); }
   button:disabled { background:var(--grid); color:var(--muted); cursor:not-allowed; }
-  /* gauges */
+
+  /* gauges -- persistent DOM, needle animates via CSS transition on the
+     SVG geometry attributes (x2/y2) rather than a full re-render, so a
+     new value visibly sweeps into place instead of jump-cutting. */
   .gauges { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
   .gauge { text-align:center; }
   .gauge svg { width:100%; max-width:130px; height:76px; }
-  .gauge .val { font-size:17px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .gauge line.needle { transition:x2 .7s cubic-bezier(.22,1,.36,1), y2 .7s cubic-bezier(.22,1,.36,1), stroke .35s; }
+  .gauge circle.needle-dot { transition:fill .35s; }
+  .gauge .val { font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; transition:color .35s; }
   .gauge .lbl { font-size:11px; color:var(--muted); margin-top:1px; }
   .gauge .rng { font-size:9.5px; color:var(--muted); opacity:.75; }
+
+  /* class-distribution bars: HTML/CSS bars per dataviz mark spec -- capped
+     thickness, 4px rounded data-end, square baseline, status colors, value
+     at the tip, category directly labeled (never color-alone identity). */
+  .distwrap { display:flex; align-items:flex-end; gap:14px; height:118px; padding:0 6px; }
+  .distcol { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; }
+  .distval { font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; margin-bottom:4px; }
+  .distbar { width:28px; border-radius:4px 4px 0 0; transition:height .7s cubic-bezier(.22,1,.36,1); min-height:2px; }
+  .distlbl { font-size:10px; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.04em; }
+  .diststats { margin-top:12px; padding-top:10px; border-top:1px solid var(--grid);
+               font-size:11.5px; color:var(--muted); display:flex; justify-content:space-between; }
+
+  .spark-tile + .spark-tile { margin-top:14px; padding-top:14px; border-top:1px solid var(--grid); }
+  .spark-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px; }
+  .spark-lbl { font-size:11.5px; color:var(--muted); }
+  .spark-now { font-size:16px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .spark-svg { width:100%; height:44px; display:block; }
+
+  /* skeleton loaders -- the deliberately-designed "waiting for data" look */
+  .skel { border-radius:6px; background:linear-gradient(100deg,var(--grid) 20%,#33415a 40%,var(--grid) 60%);
+          background-size:250% 100%; animation:shimmer 1.7s ease-in-out infinite; }
+  @keyframes shimmer { 0%{background-position:120% 0} 100%{background-position:-20% 0} }
+  .skel-line { height:13px; margin:8px 0; }
+  .skel-bars { display:flex; align-items:flex-end; gap:14px; height:118px; padding:0 6px; }
+  .skel-bars > div { flex:1; border-radius:4px 4px 0 0; opacity:.55; }
+  .waiting-note { font-size:11px; color:var(--muted); margin-top:10px; line-height:1.5; }
+
+  /* architecture diagram */
+  .diagram-svg { width:100%; height:auto; display:block; }
+  .diagram-note { font-size:11px; color:var(--muted); margin-top:10px; }
+
   #map { height:260px; border-radius:8px; background:#0d1117; }
   .leaflet-container { background:#0d1117; }
   .maphint { font-size:11px; color:var(--muted); margin-top:8px; }
@@ -64,22 +146,35 @@
 </head>
 <body>
 <header>
-  <h1>ConcreSense</h1>
-  <div class="sub">On-site fresh-concrete screening · ESP32 sensor fusion · IS 456:2000</div>
+  <div class="titlerow">
+    <h1>ConcreSense</h1>
+    <span class="tag">IS 456:2000</span>
+  </div>
+  <div class="sub">On-site fresh-concrete screening · ESP32 sensor fusion · TinyML + rule-based verdict</div>
   <div class="note">
     Readings come from a device calibrated against proxy materials and a model trained on
     physics-simulated data. Not validated against laboratory-tested concrete.
   </div>
-  <div class="student">Anbuchelvan &nbsp;·&nbsp; CSE A &nbsp;·&nbsp; 24CS0059</div>
+  <div class="headerfoot">
+    <div class="student">Anbuchelvan &nbsp;·&nbsp; CSE A &nbsp;·&nbsp; 24CS0059</div>
+    <div class="statusstrip" id="statusstrip">
+      <span class="pill"><span class="pdot" id="hpMqtt"></span>mqtt <b id="hpMqttTxt">—</b></span>
+      <span class="pill"><span class="pdot" id="hpWs"></span>viewers <b id="hpWsTxt">—</b></span>
+      <span class="pill">tests received <b id="hpRecv">0</b></span>
+      <span class="pill">server up <b id="hpUptime">—</b></span>
+    </div>
+  </div>
 </header>
 
 <div class="wrap">
-  <div class="card">
+  <div class="card" id="verdictCard">
     <h2>Latest verdict</h2>
     <div id="verdict" class="verdict UNKNOWN">—</div>
     <div id="verdictMeta" class="empty" style="margin-top:8px">waiting for a device to publish…</div>
+    <div id="deviceInfo" class="empty" style="margin-top:4px; font-size:11px;"></div>
     <div class="status" style="margin-top:14px">
       <span id="dot" class="dot"></span><span id="conn">connecting…</span>
+      <span style="margin-left:14px" class="hb" id="hb"></span><span id="hbTxt" class="empty">no data yet</span>
     </div>
     <div style="margin-top:14px">
       <button id="pdfBtn" disabled>Download IS 456 audit PDF</button>
@@ -87,7 +182,7 @@
   </div>
 
   <div class="card">
-    <h2>Gauges <span id="gaugeCount" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+    <h2>Gauges <span id="gaugeCount" class="hint"></span></h2>
     <div class="gauges" id="gauges"></div>
   </div>
 
@@ -98,12 +193,99 @@
   </div>
 
   <div class="card">
+    <h2>Verdict distribution <span id="distCount" class="hint"></span></h2>
+    <div id="distBody">
+      <div class="skel-bars"><div class="skel" style="height:55%"></div><div class="skel" style="height:30%"></div><div class="skel" style="height:75%"></div></div>
+      <div class="waiting-note">Counts across all recorded tests (GOOD / MARGINAL / REJECT), from <code>/api/summary</code>. Fills in once tests start arriving.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Trend <span class="hint">last 25 tests</span></h2>
+    <div id="trendBody">
+      <div class="spark-tile"><div class="skel skel-line" style="width:60%"></div><div class="skel" style="height:30px;border-radius:6px"></div></div>
+      <div class="spark-tile"><div class="skel skel-line" style="width:50%"></div><div class="skel" style="height:30px;border-radius:6px"></div></div>
+      <div class="waiting-note">Needs at least 2 tests to draw a line — appears automatically.</div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>Raw sensors</h2>
     <div id="raw"><div class="empty">no data yet</div></div>
   </div>
 
+  <div class="card" style="grid-column:span 2; min-width:420px">
+    <h2>System architecture <span class="hint">ESP32 → MQTT → dashboard</span></h2>
+    <svg class="diagram-svg" viewBox="0 0 920 190" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+      <!-- box template: 170 wide x 140 tall, y=15 -->
+      <g font-family="ui-sans-serif,system-ui,sans-serif">
+        <!-- 1: sensors -->
+        <rect x="10" y="15" width="168" height="140" rx="10" fill="var(--panel-hi)" stroke="var(--grid)"/>
+        <text x="94" y="36" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">ESP32 · Core 1</text>
+        <text x="94" y="50" text-anchor="middle" font-size="10" fill="var(--muted)">sensor polling</text>
+        <g font-size="10" fill="var(--muted)" text-anchor="middle">
+          <text x="94" y="70">HX711 load cell</text>
+          <text x="94" y="85">Capacitive moisture</text>
+          <text x="94" y="100">DS18B20 temp</text>
+          <text x="94" y="115">MPU6050 vibration</text>
+          <text x="94" y="130">NEO-6M GPS</text>
+        </g>
+        <line x1="178" y1="85" x2="216" y2="85" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- 2: fusion -->
+        <rect x="218" y="15" width="168" height="140" rx="10" fill="var(--panel-hi)" stroke="var(--grid)"/>
+        <text x="302" y="36" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">ESP32 · Core 0</text>
+        <text x="302" y="50" text-anchor="middle" font-size="10" fill="var(--muted)">edge processing</text>
+        <g font-size="10" fill="var(--muted)" text-anchor="middle">
+          <text x="302" y="75">Feature extraction</text>
+          <text x="302" y="90">IS 456 rule engine</text>
+          <text x="302" y="105">TinyML INT8 inference</text>
+          <text x="302" y="120">(Edge Impulse C++ SDK)</text>
+        </g>
+        <line x1="386" y1="85" x2="424" y2="85" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- 3: transport -->
+        <rect x="426" y="15" width="168" height="140" rx="10" fill="var(--panel-hi)" stroke="var(--grid)"/>
+        <text x="510" y="36" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">WiFi → MQTT</text>
+        <text x="510" y="50" text-anchor="middle" font-size="10" fill="var(--muted)">publish, QoS 0</text>
+        <g font-size="9.5" fill="var(--muted)" text-anchor="middle">
+          <text x="510" y="78">concresense/site/</text>
+          <text x="510" y="92">&lt;device_id&gt;/test</text>
+          <text x="510" y="112">JSON, NTP-stamped</text>
+          <text x="510" y="126">data_source tagged</text>
+        </g>
+        <line x1="594" y1="85" x2="632" y2="85" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- 4: server -->
+        <rect x="634" y="15" width="168" height="140" rx="10" fill="var(--panel-hi)" stroke="var(--grid)"/>
+        <text x="718" y="36" text-anchor="middle" font-size="12.5" font-weight="700" fill="var(--fg)">Node.js server</text>
+        <text x="718" y="50" text-anchor="middle" font-size="10" fill="var(--muted)">this machine</text>
+        <g font-size="10" fill="var(--muted)" text-anchor="middle">
+          <text x="718" y="75">Embedded aedes broker</text>
+          <text x="718" y="90">WebSocket relay</text>
+          <text x="718" y="105">REST API</text>
+          <text x="718" y="120">Bounded 500-record ring</text>
+        </g>
+        <line x1="802" y1="85" x2="840" y2="85" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrow)"/>
+
+        <!-- 5: dashboard -->
+        <rect x="842" y="35" width="72" height="100" rx="10" fill="rgba(57,135,229,.12)" stroke="var(--accent)"/>
+        <text x="878" y="70" text-anchor="middle" font-size="10.5" font-weight="700" fill="var(--fg)">This</text>
+        <text x="878" y="84" text-anchor="middle" font-size="10.5" font-weight="700" fill="var(--fg)">page</text>
+        <text x="878" y="105" text-anchor="middle" font-size="9" fill="var(--muted)">+ PDF</text>
+        <text x="878" y="118" text-anchor="middle" font-size="9" fill="var(--muted)">report</text>
+      </g>
+    </svg>
+    <div class="diagram-note">Fixed pipeline reference — shown regardless of whether a device is currently connected.</div>
+  </div>
+
   <div class="card" style="grid-column:span 2; min-width:320px">
-    <h2>Test locations <span id="mapState" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+    <h2>Test locations <span id="mapState" class="hint"></span></h2>
     <div id="map"></div>
     <div class="maphint" id="mapHint">
       GPS pins appear once a test is published with a satellite fix.
@@ -115,10 +297,10 @@
     <h2>Recent tests</h2>
     <table id="hist">
       <thead><tr>
-        <th>#</th><th>time (UTC)</th><th>w/c</th><th>slump</th><th>temp</th>
+        <th>#</th><th>time (UTC)</th><th>source</th><th>w/c</th><th>slump</th><th>temp</th>
         <th>rules</th><th>model</th><th>agree</th>
       </tr></thead>
-      <tbody><tr><td colspan="8" class="empty">no tests recorded yet</td></tr></tbody>
+      <tbody><tr><td colspan="9" class="empty">no tests recorded yet</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -130,13 +312,23 @@ const fmt = (v, d = 2, unit = '') =>
   (v === undefined || v === null || Number.isNaN(v)) ? '—' : Number(v).toFixed(d) + unit;
 const row = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
 const COLORS = { GOOD:'var(--good)', MARGINAL:'var(--marginal)', REJECT:'var(--reject)' };
+const HEX = { GOOD:'#0ca30c', MARGINAL:'#fab219', REJECT:'#d03b3b', UNKNOWN:'#8b98a9' };
 
-let history = [];
+let history = [];       // client-side, capped, newest-first (mirrors what the page has seen)
+let lastMsgAt = null;   // Date, real receipt time of the most recent record
+
+function pulseCard(el) {
+  if (!el) return;
+  el.classList.add('pulse-flash');
+  setTimeout(() => el.classList.remove('pulse-flash'), 700);
+}
 
 /* ---------------------------------------------------------------- gauges
-   Each gauge is a 180° arc. `lo`/`hi` set the sweep; `gLo`/`gHi` mark the
-   IS 456 GOOD window, drawn as a green band so a value is readable as
-   in-spec or out-of-spec at a glance rather than needing the number. */
+   Each gauge is a 180° arc, built ONCE as persistent DOM so later updates
+   only move the needle (x2/y2) and swap colors -- CSS transitions on those
+   attributes make the needle visibly sweep to its new value instead of
+   jump-cutting on every re-render. `lo`/`hi` set the sweep; `gLo`/`gHi` mark
+   the IS 456 GOOD window as a green band. */
 const GAUGE_SPECS = [
   { key:'estimated_wc_ratio', from:'features', label:'w/c ratio',
     lo:0.30, hi:0.70, gLo:0.40, gHi:0.50, digits:3, unit:'' },
@@ -157,34 +349,129 @@ function arcPath(cx, cy, r, f0, f1) {
   return `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`;
 }
 
-function renderGauges(rec) {
-  const html = GAUGE_SPECS.map(s => {
-    const src = rec ? (rec[s.from] || {}) : {};
-    const v = src[s.key];
-    const has = v !== undefined && v !== null && !Number.isNaN(v);
-    const frac = has ? (v - s.lo) / (s.hi - s.lo) : 0;
+function buildGaugesOnce() {
+  const html = GAUGE_SPECS.map((s, i) => {
     const gf0 = (s.gLo - s.lo) / (s.hi - s.lo), gf1 = (s.gHi - s.lo) / (s.hi - s.lo);
-    const inSpec = has && v >= s.gLo && v <= s.gHi;
-    const [nx, ny] = polar(65, 62, 44, has ? frac : 0);
+    const [nx, ny] = polar(65, 62, 44, 0);
     return `<div class="gauge">
       <svg viewBox="0 0 130 72">
-        <path d="${arcPath(65,62,44,0,1)}" stroke="#2a3444" stroke-width="9"
-              fill="none" stroke-linecap="round"/>
-        <path d="${arcPath(65,62,44,gf0,gf1)}" stroke="var(--good)" stroke-width="9"
-              fill="none" opacity=".38" stroke-linecap="round"/>
-        ${has ? `<line x1="65" y1="62" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}"
-              stroke="${inSpec ? 'var(--good)' : 'var(--reject)'}" stroke-width="2.5"
-              stroke-linecap="round"/>
-              <circle cx="65" cy="62" r="3.5" fill="${inSpec?'var(--good)':'var(--reject)'}"/>`
-             : `<circle cx="65" cy="62" r="3.5" fill="#2a3444"/>`}
+        <path d="${arcPath(65,62,44,0,1)}" stroke="#2a3444" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <path d="${arcPath(65,62,44,gf0,gf1)}" stroke="var(--good)" stroke-width="9" fill="none" opacity=".38" stroke-linecap="round"/>
+        <line id="g${i}-needle" class="needle" x1="65" y1="62" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}"
+              stroke="#2a3444" stroke-width="2.5" stroke-linecap="round"/>
+        <circle id="g${i}-dot" class="needle-dot" cx="65" cy="62" r="3.5" fill="#2a3444"/>
       </svg>
-      <div class="val" style="color:${has ? (inSpec?'var(--good)':'var(--reject)') : 'var(--muted)'}">
-        ${has ? fmt(v, s.digits, s.unit) : '—'}</div>
+      <div class="val" id="g${i}-val" style="color:var(--muted)">—</div>
       <div class="lbl">${s.label}</div>
       <div class="rng">good: ${s.gLo}–${s.gHi}${s.unit}</div>
     </div>`;
   }).join('');
   $('gauges').innerHTML = html;
+}
+
+function updateGauges(rec) {
+  GAUGE_SPECS.forEach((s, i) => {
+    const src = rec ? (rec[s.from] || {}) : {};
+    const v = src[s.key];
+    const has = v !== undefined && v !== null && !Number.isNaN(v);
+    const frac = has ? (v - s.lo) / (s.hi - s.lo) : 0;
+    const inSpec = has && v >= s.gLo && v <= s.gHi;
+    const [nx, ny] = polar(65, 62, 44, has ? frac : 0);
+    const col = has ? (inSpec ? 'var(--good)' : 'var(--reject)') : '#2a3444';
+    const needle = $(`g${i}-needle`), dot = $(`g${i}-dot`), val = $(`g${i}-val`);
+    needle.setAttribute('x2', nx.toFixed(1));
+    needle.setAttribute('y2', ny.toFixed(1));
+    needle.setAttribute('stroke', has ? col : '#2a3444');
+    dot.setAttribute('fill', col);
+    val.textContent = has ? fmt(v, s.digits, s.unit) : '—';
+    val.style.color = has ? col : 'var(--muted)';
+  });
+}
+
+/* --------------------------------------------------------- verdict distribution
+   HTML/CSS bars (not fabricated -- pulled from /api/summary, which counts
+   the server's actual retained history). Status colors are the dataviz
+   skill's fixed palette; each bar is directly labeled underneath, so
+   identity never rides on color alone. */
+function renderDistribution(summary) {
+  const body = $('distBody');
+  if (!summary || !summary.total) {
+    $('distCount').textContent = '';
+    return; // leave the skeleton in place until real counts exist
+  }
+  const c = summary.counts || {};
+  const cats = [['GOOD','good'], ['MARGINAL','marginal'], ['REJECT','reject']];
+  const max = Math.max(1, c.GOOD || 0, c.MARGINAL || 0, c.REJECT || 0);
+  $('distCount').textContent = `(${summary.total} test${summary.total===1?'':'s'})`;
+  const bars = cats.map(([k, varname]) => {
+    const n = c[k] || 0;
+    const h = Math.max(n > 0 ? 6 : 2, Math.round((n / max) * 100));
+    return `<div class="distcol">
+      <div class="distval" style="color:var(--${varname})">${n}</div>
+      <div class="distbar" style="height:${h}%; background:var(--${varname})"></div>
+      <div class="distlbl">${k}</div>
+    </div>`;
+  }).join('');
+  const agree = summary.total - (summary.model_rule_disagreements || 0);
+  const pct = summary.total ? Math.round(100 * agree / summary.total) : 0;
+  body.innerHTML = `<div class="distwrap">${bars}</div>
+    <div class="diststats"><span>model ↔ rules agree</span><span style="color:var(--fg)">${agree}/${summary.total} (${pct}%)</span></div>`;
+}
+
+async function fetchSummary() {
+  try {
+    const r = await fetch('/api/summary');
+    const d = await r.json();
+    renderDistribution(d);
+  } catch (e) { /* summary is a nice-to-have; render() still works without it */ }
+}
+
+/* ------------------------------------------------------------------ trend
+   Small sparklines over the client-side history buffer (already seeded from
+   /api/history and kept live over the websocket). De-emphasis line, accent
+   endpoint marker = "current value", per the stat-tile trend contract. */
+function sparklineSVG(values, hue) {
+  const w = 220, h = 44, pad = 4;
+  const vmin = Math.min(...values), vmax = Math.max(...values);
+  const span = (vmax - vmin) || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - vmin) / span) * (h - pad * 2);
+    return [x, y];
+  });
+  const line = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const area = line + ` L${pts[pts.length-1][0].toFixed(1)},${h-pad} L${pts[0][0].toFixed(1)},${h-pad} Z`;
+  const last = pts[pts.length - 1];
+  return `<svg class="spark-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${area}" fill="${hue}" opacity=".12" stroke="none"/>
+    <path d="${line}" fill="none" stroke="${hue}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity=".85"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4.5" fill="${hue}" stroke="var(--panel)" stroke-width="2"/>
+  </svg>`;
+}
+
+function renderTrends() {
+  const body = $('trendBody');
+  // chronological, oldest -> newest (client history is newest-first)
+  const chron = history.slice(0, 25).slice().reverse();
+  const wc = chron.map(h => (h.features||{}).estimated_wc_ratio).filter(v => v != null && !Number.isNaN(v));
+  const conf = chron.map(h => (h.classification||{}).confidence).filter(v => v != null && !Number.isNaN(v));
+
+  const tile = (label, values, hue, digits, unit) => {
+    if (values.length < 2) {
+      return `<div class="spark-tile"><div class="spark-lbl">${label}</div>
+        <div class="empty" style="font-size:11.5px">not enough tests yet (need ≥ 2)</div></div>`;
+    }
+    const now = values[values.length - 1];
+    return `<div class="spark-tile">
+      <div class="spark-head"><span class="spark-lbl">${label}</span>
+        <span class="spark-now" style="color:${hue}">${fmt(now, digits, unit)}</span></div>
+      ${sparklineSVG(values, hue)}
+    </div>`;
+  };
+
+  body.innerHTML =
+    tile('w/c ratio', wc, '#3987e5', 3, '') +
+    tile('TinyML confidence', conf.map(v => v * 100), '#d95926', 1, '%');
 }
 
 /* ------------------------------------------------------------------ map
@@ -220,7 +507,7 @@ function addPin(rec) {
   const loc = rec.location || {};
   if (!loc.fix || loc.latitude == null) return;
   const v = (rec.classification || {}).rule_result || 'UNKNOWN';
-  const col = { GOOD:'#3fb950', MARGINAL:'#d29922', REJECT:'#f85149' }[v] || '#8b98a9';
+  const col = HEX[v] || HEX.UNKNOWN;
   L.circleMarker([loc.latitude, loc.longitude], {
     radius: 8, color: col, fillColor: col, fillOpacity: .75, weight: 2,
   }).bindPopup(
@@ -238,6 +525,8 @@ function addPin(rec) {
 function render(r) {
   const cls = r.classification || {}, f = r.features || {}, raw = r.sensor_raw || {};
 
+  lastMsgAt = new Date();
+
   // The RULE result drives the headline. Compliance follows IS 456, not the
   // model; the model is shown next to it for comparison.
   const verdict = cls.rule_result || 'UNKNOWN';
@@ -245,14 +534,18 @@ function render(r) {
   $('verdict').className = 'verdict ' + verdict;
 
   $('verdictMeta').className = '';
-  const simTag = r.data_source === 'simulated_onboard'
+  const isSim = r.data_source === 'simulated_onboard';
+  const simTag = isSim
     ? ' <b style="color:var(--marginal)">[SIMULATED — no sensors involved]</b>' : '';
   $('verdictMeta').innerHTML =
     `test #${r.seq ?? '?'} · ${r.timestamp_utc ?? 'no timestamp'}`
     + (r.time_source === 'unsynced' ? ' <em>(clock not NTP-synced)</em>' : '')
     + simTag;
+  $('deviceInfo').textContent =
+    [r.device_id && `device ${r.device_id}`, r.firmware && `fw ${r.firmware}`, r.standard_compliance]
+      .filter(Boolean).join(' · ');
 
-  renderGauges(r);
+  updateGauges(r);
 
   $('cls').innerHTML =
     row('IS 456 rules', cls.rule_result ?? '—') +
@@ -283,9 +576,12 @@ function render(r) {
   history = history.slice(0, 25);
   $('hist').querySelector('tbody').innerHTML = history.map(h => {
     const c = h.classification||{}, hf = h.features||{}, hr = h.sensor_raw||{};
+    const src = h.data_source === 'simulated_onboard'
+      ? '<span class="badge SIM">sim</span>' : '<span class="badge DEV">device</span>';
     return `<tr>
       <td>${h.seq ?? '?'}</td>
       <td>${(h.timestamp_utc ?? '').replace('T',' ').replace('Z','')}</td>
+      <td>${src}</td>
       <td>${fmt(hf.estimated_wc_ratio,3)}</td>
       <td>${fmt(hf.estimated_slump_mm,0)}</td>
       <td>${fmt(hr.temperature_c,1)}</td>
@@ -294,7 +590,49 @@ function render(r) {
       <td>${c.agreement===undefined ? '—' : (c.agreement ? '✓' : '✗')}</td>
     </tr>`;
   }).join('');
+
+  renderTrends();
+  fetchSummary();
+  pulseCard($('verdictCard'));
 }
+
+/* --------------------------------------------------------- live heartbeat
+   Ticks every second off the REAL last-receipt timestamp -- never simulated
+   on its own. <15s = fresh (pulsing), <60s = stale, otherwise stalled. */
+function tickHeartbeat() {
+  const hb = $('hb'), txt = $('hbTxt');
+  if (!lastMsgAt) { hb.className = 'hb'; txt.className = 'empty'; txt.textContent = 'no data yet'; return; }
+  const secs = Math.floor((Date.now() - lastMsgAt.getTime()) / 1000);
+  txt.className = '';
+  if (secs < 15) { hb.className = 'hb fresh'; txt.textContent = secs <= 1 ? 'just now' : `${secs}s ago`; }
+  else if (secs < 60) { hb.className = 'hb stale'; txt.textContent = `${secs}s ago`; }
+  else if (secs < 3600) { hb.className = 'hb dead'; txt.textContent = `${Math.floor(secs/60)}m ago (stalled?)`; }
+  else { hb.className = 'hb dead'; txt.textContent = `${Math.floor(secs/3600)}h ago (stalled?)`; }
+}
+setInterval(tickHeartbeat, 1000);
+
+/* ----------------------------------------------------------- health poll */
+function fmtUptime(startedAt) {
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+async function pollHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    $('hpMqtt').className = 'pdot ' + (d.mqtt_connected ? 'up' : 'down');
+    $('hpMqttTxt').textContent = d.mqtt_connected ? (d.embedded_broker ? 'embedded' : 'external') : 'down';
+    $('hpWs').className = 'pdot ' + (d.websocket_clients > 0 ? 'up' : '');
+    $('hpWsTxt').textContent = d.websocket_clients ?? 0;
+    $('hpRecv').textContent = d.received ?? 0;
+    $('hpUptime').textContent = fmtUptime(d.startedAt);
+  } catch (e) {
+    $('hpMqttTxt').textContent = 'unreachable';
+  }
+}
+pollHealth();
+setInterval(pollHealth, 4000);
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -315,12 +653,14 @@ $('pdfBtn').addEventListener('click', () => {
 });
 
 initMap();
-renderGauges(null);
+buildGaugesOnce();
+tickHeartbeat();
 
 // Seed from history so a freshly-opened page is not blank.
 fetch('/api/history?limit=25').then(r => r.json())
   .then(d => { if (d.data && d.data.length) d.data.forEach(render); })
   .catch(() => {});
+fetchSummary();
 
 connect();
 </script>

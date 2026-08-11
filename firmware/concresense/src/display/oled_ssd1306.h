@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 #include <Adafruit_SSD1306.h>
 
 #include "../sensor_status.h"
@@ -21,9 +22,18 @@ class OledDisplay {
 
   void message(const char* title, const char* body);
 
+  // Phase 3: post-measurement verdict view. `verdict` is the IS456 rule
+  // result (compliance-authoritative -- see reportMeasurement()) and is
+  // rendered large; `mlLine`/`wcLine`/`slumpLine` are pre-formatted detail
+  // rows shown below it.
+  void showVerdict(const char* verdict, const char* mlLine,
+                    const char* wcLine, const char* slumpLine);
+
   SensorStatus status() const { return status_; }
 
  private:
+  void centered(const char* text, int16_t y, uint8_t size);
+
   Adafruit_SSD1306* d_ = nullptr;
   SensorStatus status_ = SensorStatus::ABSENT;
 };

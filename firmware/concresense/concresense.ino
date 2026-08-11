@@ -336,16 +336,14 @@ static void reportMeasurement(const MeasurementRecord& rec,
   Serial.println(F("------------------------------------------\n"));
 
   if (oled.status() == SensorStatus::OK) {
-    char l0[24], l1[24], l2[24], l3[24];
-    snprintf(l0, sizeof(l0), "IS456: %s", qualityName(ruleClass));
-    snprintf(l1, sizeof(l1), "ML: %s",
+    char mlLine[24], wcLine[24], slumpLine[24];
+    snprintf(mlLine, sizeof(mlLine), "ML: %s",
              inf.valid ? inferenceClassName(inf.classIndex) : "--");
-    if (d.wcValid) snprintf(l2, sizeof(l2), "w/c  %.2f", d.wcRatio);
-    else snprintf(l2, sizeof(l2), "w/c  --");
-    if (d.slumpValid) snprintf(l3, sizeof(l3), "slump %.0fmm", d.slumpMm);
-    else snprintf(l3, sizeof(l3), "slump --");
-    const char* lines[] = {l0, l1, l2, l3};
-    oled.showStatusGrid(lines, 4);
+    if (d.wcValid) snprintf(wcLine, sizeof(wcLine), "w/c    %.2f", d.wcRatio);
+    else snprintf(wcLine, sizeof(wcLine), "w/c    --");
+    if (d.slumpValid) snprintf(slumpLine, sizeof(slumpLine), "slump  %.0fmm", d.slumpMm);
+    else snprintf(slumpLine, sizeof(slumpLine), "slump  --");
+    oled.showVerdict(qualityName(ruleClass), mlLine, wcLine, slumpLine);
   }
 }
 
@@ -388,7 +386,12 @@ static void runMeasurementCycle(bool csv) {
 // overflow it and corrupt sentences. All GPS access lives on this core so the
 // non-thread-safe TinyGPS++ parser is never touched from two cores at once.
 static void samplingTask(void*) {
-  uint32_t lastMeasureMs = 0;
+  // Start the clock from task-start, not power-on-zero: the boot sequence
+  // (splash animation, bring-up report, help text) prints on Core 1 for a
+  // couple of seconds, and if the first auto-measurement's Core 0 report
+  // lands in that same window the two interleave into a garbled console --
+  // harmless functionally, but ugly on a screen-shared serial monitor.
+  uint32_t lastMeasureMs = millis();
   for (;;) {
     gps.poll();
 
