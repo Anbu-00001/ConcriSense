@@ -32,6 +32,13 @@ struct MeasurementRecord {
   bool tempValid = false;
   bool loadValid = false;
 
+  // Per-cycle load cell status. Kept separate from loadcell.status() (which
+  // reflects whether the chip is present at all) because a rejected-outlier
+  // cycle is transient, not a chip fault -- reportMeasurement() needs this to
+  // print OUT_OF_RANGE instead of misleadingly printing OK when the number
+  // was refused for THIS cycle only.
+  SensorStatus loadStatus = SensorStatus::ABSENT;
+
   VibrationFeatures vib;
   DerivedProperties derived;
 

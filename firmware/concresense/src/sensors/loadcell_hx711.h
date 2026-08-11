@@ -50,5 +50,14 @@ class LoadCellHX711 {
   float lastGood_ = 0.0f;
   bool hasLastGood_ = false;
 
+  // Consecutive-rejection counter. Comparing only against lastGood_ has no
+  // way back if the true resting value genuinely moves (thermal settling, a
+  // bump, or a connection fault that does NOT self-clear back to the old
+  // baseline) -- every future reading would then look like a jump forever,
+  // reporting the load cell as permanently invalid. After
+  // HX711_MAX_REJECT_STREAK straight rejections, the latest reading is
+  // accepted as a new baseline instead of staying stuck.
+  uint8_t rejectStreak_ = 0;
+
   bool waitReady(uint32_t timeoutMs);
 };

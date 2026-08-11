@@ -207,6 +207,7 @@ static MeasurementRecord acquireMeasurement() {
   rec.moistureValid = mv.valid();
   rec.tempValid = tc.valid();
   rec.loadValid = load.valid();
+  rec.loadStatus = load.status;
   rec.moistureMv = mv.valid() ? mv.value : NAN;
   rec.tempC = tc.valid() ? tc.value : NAN;
   rec.loadCounts = load.valid() ? load.value : NAN;
@@ -220,6 +221,41 @@ static MeasurementRecord acquireMeasurement() {
 }
 
 // ------------------------------------------------- Phase 3: reporting
+
+// Cached state for refreshOledLive() below -- decoupled from the 5s
+// measurement cadence so the OLED's animated elements (live dot, GPS radar
+// sweep) actually animate instead of advancing once per MEASURE_INTERVAL_MS
+// and looking frozen/jerky the rest of the time.
+static bool gHaveOledState = false;
+static MeasurementRecord gLastRec;
+static QualityClass gLastRuleClass = QualityClass::UNKNOWN;
+static char gLastMlLine[24] = "";
+static char gLastWcLine[24] = "";
+static char gLastSlumpLine[24] = "";
+
+// Redraws the OLED from the last cached measurement. Called once immediately
+// when a new measurement lands (via reportMeasurement below), and again on a
+// fast independent cadence from networkTask's loop -- the blink dot and GPS
+// radar sweep are already computed from live millis() inside OledDisplay's
+// draw calls, so simply calling them more often is what makes them animate
+// smoothly instead of jumping once every 5 seconds.
+static void refreshOledLive() {
+  if (oled.status() != SensorStatus::OK || !gHaveOledState) return;
+
+  if (gLastRuleClass == QualityClass::UNKNOWN) {
+    if (!gLastRec.gps.valid && (gLastRec.seq % 2) == 0) {
+      oled.showGpsSearching(gLastRec.gps.satellitesInView,
+                            gLastRec.gps.searchElapsedMs);
+    } else {
+      oled.showLiveReadings(gLastRec.tempC, gLastRec.tempValid,
+                            gLastRec.loadCounts, gLastRec.loadValid);
+    }
+  } else {
+    oled.showVerdict(qualityName(gLastRuleClass), gLastMlLine, gLastWcLine,
+                     gLastSlumpLine);
+  }
+}
+
 static void reportMeasurement(const MeasurementRecord& rec,
                               const Inference& inf, QualityClass ruleClass,
                               bool csv) {
@@ -254,7 +290,7 @@ static void reportMeasurement(const MeasurementRecord& rec,
 
   Serial.print(F("  load       : "));
   if (rec.loadValid) Serial.printf("%.2f counts\n", rec.loadCounts);
-  else Serial.println(statusName(loadcell.status()));
+  else Serial.println(statusName(rec.loadStatus));
 
   Serial.print(F("  vibration  : "));
   if (rec.vib.valid) {
@@ -336,28 +372,24 @@ static void reportMeasurement(const MeasurementRecord& rec,
   Serial.println(F("------------------------------------------\n"));
 
   if (oled.status() == SensorStatus::OK) {
-    if (ruleClass == QualityClass::UNKNOWN) {
-      // Not classifiable yet (calibration incomplete) -- show a live readout
-      // of what IS actually measured instead of a dead-end "UNKNOWN" label
-      // repeating every cycle. While there is no GPS fix (the normal indoor
-      // case), alternate every other cycle with real GPS search telemetry
-      // instead of leaving that sensor invisible the whole time.
-      if (!rec.gps.valid && (rec.seq % 2) == 0) {
-        oled.showGpsSearching(rec.gps.satellitesInView, rec.gps.searchElapsedMs);
-      } else {
-        oled.showLiveReadings(rec.tempC, rec.tempValid, rec.loadCounts,
-                              rec.loadValid);
-      }
-    } else {
-      char mlLine[24], wcLine[24], slumpLine[24];
-      snprintf(mlLine, sizeof(mlLine), "ML: %s",
+    // Not classifiable yet (calibration incomplete) -- showGpsSearching /
+    // showLiveReadings give a live readout of what IS actually measured
+    // instead of a dead-end "UNKNOWN" label repeating every cycle. Once
+    // classified, precompute the verdict detail lines here (once per
+    // measurement, not once per animation frame) and cache everything for
+    // refreshOledLive() to redraw on its own fast cadence.
+    if (ruleClass != QualityClass::UNKNOWN) {
+      snprintf(gLastMlLine, sizeof(gLastMlLine), "ML: %s",
                inf.valid ? inferenceClassName(inf.classIndex) : "--");
-      if (d.wcValid) snprintf(wcLine, sizeof(wcLine), "w/c    %.2f", d.wcRatio);
-      else snprintf(wcLine, sizeof(wcLine), "w/c    --");
-      if (d.slumpValid) snprintf(slumpLine, sizeof(slumpLine), "slump  %.0fmm", d.slumpMm);
-      else snprintf(slumpLine, sizeof(slumpLine), "slump  --");
-      oled.showVerdict(qualityName(ruleClass), mlLine, wcLine, slumpLine);
+      if (d.wcValid) snprintf(gLastWcLine, sizeof(gLastWcLine), "w/c    %.2f", d.wcRatio);
+      else snprintf(gLastWcLine, sizeof(gLastWcLine), "w/c    --");
+      if (d.slumpValid) snprintf(gLastSlumpLine, sizeof(gLastSlumpLine), "slump  %.0fmm", d.slumpMm);
+      else snprintf(gLastSlumpLine, sizeof(gLastSlumpLine), "slump  --");
     }
+    gLastRec = rec;
+    gLastRuleClass = ruleClass;
+    gHaveOledState = true;
+    refreshOledLive();
   }
 }
 
@@ -432,10 +464,13 @@ static void networkTask(void*) {
     net::poll();
     // Short timeout rather than portMAX_DELAY: net::poll() must keep running
     // to service MQTT keepalive and WiFi reconnects even when no measurements
-    // are arriving.
-    if (xQueueReceive(gMeasurementQueue, &rec, pdMS_TO_TICKS(200)) == pdTRUE) {
+    // are arriving. Also short enough (~8Hz) to drive refreshOledLive() below
+    // at a rate that actually looks animated, rather than the OLED only
+    // updating once per 5s measurement cycle.
+    if (xQueueReceive(gMeasurementQueue, &rec, pdMS_TO_TICKS(120)) == pdTRUE) {
       processMeasurement(rec, false);
     }
+    refreshOledLive();
   }
 }
 

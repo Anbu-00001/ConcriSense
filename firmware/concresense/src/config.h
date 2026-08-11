@@ -88,6 +88,15 @@
 // begin, since a fast real plunger press could then trip the same gate.
 #define HX711_MAX_PLAUSIBLE_JUMP 6000.0f
 
+// A pure "reject if far from last accepted value" gate has no way back if
+// the true resting value genuinely moves and does not drift back to the old
+// baseline -- observed directly on this board: after one such shift, EVERY
+// following reading was rejected forever, the load cell going permanently
+// static/blank on the OLED and dashboard, which is worse than the garbage
+// values the gate was built to stop. After this many consecutive rejections
+// the latest reading is accepted as a new baseline instead of staying stuck.
+#define HX711_MAX_REJECT_STREAK 3
+
 // ---------------------------------------------------------------- IMU
 #define IMU_SAMPLE_RATE_HZ 200
 #define IMU_BURST_SAMPLES 256  // power of two, required by the radix-2 FFT
