@@ -3,6 +3,15 @@
 
 #include "../sensor_status.h"
 
+// One tracked satellite's real signal, from a GPGSV sentence slot. SNR
+// (C/N0, dB-Hz) is what the OLED renders as a bar -- not a fabricated
+// value, and indoors it is usually low or the slot is untracked entirely.
+struct GpsSatSignal {
+  uint8_t prn = 0;
+  uint8_t snr = 0;       // dB-Hz; 0 = tracked but not yet demodulated
+  bool tracked = false;  // this slot has a real PRN reported this cycle
+};
+
 struct GpsFix {
   double latitude = 0.0;
   double longitude = 0.0;
@@ -17,6 +26,11 @@ struct GpsFix {
   // near a window it is often 2-4 -- true signal, not a fabricated number.
   uint8_t satellitesInView = 0;
   uint32_t searchElapsedMs = 0;  // time since the module started searching
+
+  // Up to 4 satellites' real PRN + signal strength from the most recent
+  // GPGSV sentence. Only a snapshot of one slot group, not the full sky --
+  // enough to show genuine live signal instead of a decorative animation.
+  GpsSatSignal sig[4];
 };
 
 // NEO-6M on hardware UART2.
@@ -48,6 +62,10 @@ class GpsNeo6M {
  private:
   TinyGPSPlus gps_;
   TinyGPSCustom gsvSatsInView_;  // GPGSV field 3: total satellites in view
+  // GPGSV fields 4,8,12,16 are PRNs and 7,11,15,19 are SNR (dB-Hz) for
+  // satellite slots 1-4 of whichever GPGSV message was last parsed.
+  TinyGPSCustom gsvPrn_[4];
+  TinyGPSCustom gsvSnr_[4];
   uint32_t beginMs_ = 0;
   bool sawNmea_ = false;
   SensorStatus status_ = SensorStatus::ABSENT;

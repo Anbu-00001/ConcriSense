@@ -184,7 +184,7 @@ void OledDisplay::showLiveReadings(float tempC, bool tempValid,
   d_->display();
 }
 
-void OledDisplay::showGpsSearching(uint8_t satsInView, uint32_t elapsedMs) {
+void OledDisplay::showGpsSearching(const GpsFix& fix) {
   if (status_ != SensorStatus::OK) return;
   d_->clearDisplay();
 
@@ -194,37 +194,40 @@ void OledDisplay::showGpsSearching(uint8_t satsInView, uint32_t elapsedMs) {
   if ((millis() / 500) % 2 == 0) d_->fillCircle(124, 3, 2, SSD1306_WHITE);
   d_->drawLine(0, 9, 127, 9, SSD1306_WHITE);
 
-  // Radar sweep -- a generic "searching" motif, not a sky plot: per-satellite
-  // azimuth/elevation is not parsed, so no fabricated bearing is ever drawn.
-  // The sweep angle is driven by real millis(), so it visibly moves while
-  // waiting instead of sitting static.
-  const int16_t cx = 22, cy = 41, r = 18;
-  d_->drawCircle(cx, cy, r, SSD1306_WHITE);
-  d_->drawCircle(cx, cy, r * 2 / 3, SSD1306_WHITE);
-  d_->drawCircle(cx, cy, r / 3, SSD1306_WHITE);
-  const float angle = (millis() % 2400) / 2400.0f * 2.0f * (float)PI;
-  const int16_t ex = cx + (int16_t)(r * cosf(angle));
-  const int16_t ey = cy + (int16_t)(r * sinf(angle));
-  d_->drawLine(cx, cy, ex, ey, SSD1306_WHITE);
+  // Real numbers, one compact line: GPGSV satellite-in-view count and
+  // elapsed search time, both genuine telemetry from the module.
+  d_->setCursor(0, 12);
+  char line[32];
+  const uint32_t s = fix.searchElapsedMs / 1000;
+  snprintf(line, sizeof(line), "sats %u   %lum%02lus", fix.satellitesInView,
+           (unsigned long)(s / 60), (unsigned long)(s % 60));
+  d_->print(line);
+  d_->drawLine(0, 21, 127, 21, SSD1306_WHITE);
 
-  // Real numbers, right side: GPGSV satellite-in-view count and elapsed
-  // search time, both genuine telemetry from the module.
-  d_->setTextSize(1);
-  d_->setCursor(50, 16);
-  d_->print(F("sats in view"));
-  d_->setTextSize(2);
-  d_->setCursor(50, 26);
-  d_->print(satsInView);
-
-  d_->setTextSize(1);
-  d_->setCursor(50, 46);
-  d_->print(F("searching"));
-  d_->setCursor(50, 55);
-  char e[16];
-  const uint32_t s = elapsedMs / 1000;
-  snprintf(e, sizeof(e), "%lum%02lus", (unsigned long)(s / 60),
-           (unsigned long)(s % 60));
-  d_->print(e);
+  // Real per-satellite signal strength (C/N0, dB-Hz) from live GPGSV
+  // telemetry, one bar per tracked slot -- not a generic animation. Indoors
+  // these are usually near-zero or absent; that IS the real signal.
+  bool any = false;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (!fix.sig[i].tracked) continue;
+    any = true;
+    const int16_t y = 25 + i * 10;
+    char prnLabel[6];
+    snprintf(prnLabel, sizeof(prnLabel), "P%02u", fix.sig[i].prn);
+    d_->setCursor(0, y);
+    d_->print(prnLabel);
+    // 0-45 dB-Hz mapped to a 0-70px bar; real GPS C/N0 rarely exceeds ~50.
+    int16_t barLen = (int16_t)((fix.sig[i].snr / 45.0f) * 70.0f);
+    if (barLen > 70) barLen = 70;
+    if (barLen < 2) barLen = 2;  // a sliver still shows "detected", which is real
+    d_->fillRect(26, y, barLen, 7, SSD1306_WHITE);
+  }
+  if (!any) {
+    d_->setCursor(0, 32);
+    d_->print(F("no signal detected"));
+    d_->setCursor(0, 44);
+    d_->print(F("(normal indoors)"));
+  }
 
   d_->display();
 }

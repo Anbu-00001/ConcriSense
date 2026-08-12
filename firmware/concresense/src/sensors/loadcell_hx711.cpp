@@ -120,10 +120,16 @@ SensorStatus LoadCellHX711::tare(uint8_t samples) {
 
 Reading LoadCellHX711::read() {
   Reading r;
-  // Gate on OK, not just on ABSENT. A chip in OUT_OF_RANGE clocks out words
-  // happily, so an ABSENT-only check would return a confident 0.00 from a
-  // disconnected bridge -- a value indistinguishable from a real zero load.
-  if (status_ != SensorStatus::OK) {
+  // ABSENT/OUT_OF_RANGE from begin() are permanent gates -- the chip is not
+  // on the bus, or was saturated/disconnected at boot, and nothing about
+  // that changes cycle to cycle. TIMEOUT is deliberately NOT gated here: it
+  // used to latch permanently the first time readRawMedian() failed once,
+  // which meant a brief disturbance (e.g. someone pressing the plunger hard
+  // enough to momentarily upset the connection) could brick the load cell
+  // until reboot -- exactly backwards for a sensor whose whole job is to be
+  // pressed. A timeout is now reported for that cycle only, and the very
+  // next cycle tries again fresh.
+  if (status_ == SensorStatus::ABSENT || status_ == SensorStatus::OUT_OF_RANGE) {
     r.status = status_;
     return r;
   }
@@ -134,6 +140,7 @@ Reading LoadCellHX711::read() {
     status_ = SensorStatus::TIMEOUT;
     return r;
   }
+  status_ = SensorStatus::OK;  // a read just succeeded -- any prior TIMEOUT is over
 
   const float value = static_cast<float>(raw - offset_) / scale_;
 

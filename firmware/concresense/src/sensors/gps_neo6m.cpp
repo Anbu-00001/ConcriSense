@@ -5,6 +5,12 @@
 SensorStatus GpsNeo6M::begin(uint32_t detectTimeoutMs) {
   Serial2.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
   gsvSatsInView_.begin(gps_, "GPGSV", 3);
+  const uint8_t prnTerm[4] = {4, 8, 12, 16};
+  const uint8_t snrTerm[4] = {7, 11, 15, 19};
+  for (uint8_t i = 0; i < 4; i++) {
+    gsvPrn_[i].begin(gps_, "GPGSV", prnTerm[i]);
+    gsvSnr_[i].begin(gps_, "GPGSV", snrTerm[i]);
+  }
   beginMs_ = millis();
 
   // Presence is decided purely on whether NMEA bytes arrive, never on whether a
@@ -39,6 +45,24 @@ GpsFix GpsNeo6M::fix() {
   f.hdop = gps_.hdop.isValid() ? gps_.hdop.hdop() : 0.0f;
   f.satellitesInView = gsvSatsInView_.isValid() ? atoi(gsvSatsInView_.value()) : 0;
   f.searchElapsedMs = millis() - beginMs_;
+
+  // Real per-satellite signal, straight from the last GPGSV sentence. SNR is
+  // blank in the sentence (not zero) when a satellite is tracked but too
+  // weak to demodulate yet -- that is reported as snr=0, tracked=true,
+  // which is itself real information, not a placeholder.
+  for (uint8_t i = 0; i < 4; i++) {
+    if (gsvPrn_[i].isValid()) {
+      const char* pv = gsvPrn_[i].value();
+      if (pv[0] != '\0') {
+        f.sig[i].prn = static_cast<uint8_t>(atoi(pv));
+        f.sig[i].tracked = true;
+      }
+    }
+    if (gsvSnr_[i].isValid()) {
+      const char* sv = gsvSnr_[i].value();
+      if (sv[0] != '\0') f.sig[i].snr = static_cast<uint8_t>(atoi(sv));
+    }
+  }
 
   if (gps_.location.isValid()) {
     f.latitude = gps_.location.lat();

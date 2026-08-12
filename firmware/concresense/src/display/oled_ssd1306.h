@@ -3,6 +3,7 @@
 #include <Adafruit_SSD1306.h>
 
 #include "../sensor_status.h"
+#include "../sensors/gps_neo6m.h"
 
 // SSD1306 128x64 on the shared I2C bus.
 //
@@ -36,12 +37,12 @@ class OledDisplay {
                         bool loadValid);
 
   // Live "searching" view for the fix-not-yet-acquired state -- the normal
-  // indoor case, not an error. satsInView is real GPGSV telemetry (satellites
-  // the module can see, reported well before a fix locks); elapsedMs is real
-  // time since the GPS module started searching. No fabricated position or
-  // bearing is drawn -- the radar sweep is a generic "searching" motif, not a
-  // sky plot, since per-satellite azimuth/elevation is not parsed.
-  void showGpsSearching(uint8_t satsInView, uint32_t elapsedMs);
+  // indoor case, not an error. Renders real GPGSV telemetry: satellites in
+  // view, search elapsed time, and up to 4 satellites' actual signal
+  // strength (C/N0, dB-Hz) as bars. No fabricated position, bearing, or
+  // signal level -- indoors these bars are usually near-zero or absent
+  // entirely, and that IS the real signal, not a placeholder animation.
+  void showGpsSearching(const GpsFix& fix);
 
   SensorStatus status() const { return status_; }
 

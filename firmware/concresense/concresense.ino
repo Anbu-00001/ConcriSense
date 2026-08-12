@@ -244,8 +244,7 @@ static void refreshOledLive() {
 
   if (gLastRuleClass == QualityClass::UNKNOWN) {
     if (!gLastRec.gps.valid && (gLastRec.seq % 2) == 0) {
-      oled.showGpsSearching(gLastRec.gps.satellitesInView,
-                            gLastRec.gps.searchElapsedMs);
+      oled.showGpsSearching(gLastRec.gps);
     } else {
       oled.showLiveReadings(gLastRec.tempC, gLastRec.tempValid,
                             gLastRec.loadCounts, gLastRec.loadValid);

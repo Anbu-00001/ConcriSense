@@ -77,16 +77,19 @@
 #define HX711_DEFAULT_SCALE 1.0f
 
 // Plausibility ceiling for read(), in raw counts against the last accepted
-// reading. Measured empirically on this board over ~7 minutes of live
-// auto-measure: normal cycle-to-cycle noise is tens of counts, while an
-// intermittent DT/SCK connection corrupting a median-of-5 produces jumps of
-// 8000+ counts that always drift back toward the SAME baseline afterward
-// rather than settling on a new one -- the signature of a bad connection,
-// not a real applied force. No load-cell calibration exists yet (see
-// loadAnchors.calibrated), so there is no legitimate use of a huge
-// single-cycle jump today; revisit this once real penetration-force tests
-// begin, since a fast real plunger press could then trip the same gate.
-#define HX711_MAX_PLAUSIBLE_JUMP 6000.0f
+// reading. Originally tuned tight (6000) against a quiet idle noise floor of
+// tens of counts. That assumption broke the moment real presses started:
+// pressing the plunger IS a real, large, legitimate single-cycle jump, and
+// the tight gate was rejecting it as OUT_OF_RANGE -- indistinguishable from
+// corruption at that threshold. The idle floor itself also reads noisier at
+// this venue (hundreds to ~1500 counts, not tens). Widened well above both,
+// so this now only catches genuinely impossible spikes (multi-order-of-
+// magnitude, e.g. the +677699 outlier seen earlier) rather than real force
+// or venue noise. Loosening this trades away catching the smaller (8000-
+// 24000 count) corruption clusters seen before -- acceptable: a live device
+// that ignores real presses is a worse failure than one that occasionally
+// shows a noisy number.
+#define HX711_MAX_PLAUSIBLE_JUMP 200000.0f
 
 // A pure "reject if far from last accepted value" gate has no way back if
 // the true resting value genuinely moves and does not drift back to the old
