@@ -1,0 +1,14 @@
+data_source=synthetic_physics  |  simulated, not measured  |  synthetic-set separability, NOT real-concrete accuracy
+
+held-out n=1200  (train n=4800)
+
+              precision    recall  f1-score   support
+
+        GOOD      0.824     0.865     0.844       400
+    MARGINAL      0.711     0.690     0.701       400
+      REJECT      0.862     0.845     0.854       400
+
+    accuracy                          0.800      1200
+   macro avg      0.799     0.800     0.799      1200
+weighted avg      0.799     0.800     0.799      1200
+

@@ -1,0 +1,46 @@
+{
+  "generated": "2026-10-03T13:40:52.314044",
+  "dataset": "trainingdata.csv",
+  "n_train": 4800,
+  "n_test": 1200,
+  "hidden_units": 12,
+  "feature_order": [
+    "moisture_mv",
+    "temperature_c",
+    "penetration_force_n",
+    "vib_rms_g",
+    "vib_dominant_hz",
+    "vib_spectral_entropy",
+    "vib_damping_ratio"
+  ],
+  "class_order": [
+    "GOOD",
+    "MARGINAL",
+    "REJECT"
+  ],
+  "train_accuracy": 0.7892,
+  "held_out_accuracy": 0.8,
+  "balanced_accuracy": 0.8,
+  "macro_f1": 0.7993,
+  "cohen_kappa": 0.7,
+  "confusion_matrix": [
+    [
+      346,
+      52,
+      2
+    ],
+    [
+      72,
+      276,
+      52
+    ],
+    [
+      2,
+      60,
+      338
+    ]
+  ],
+  "data_source": "synthetic_physics",
+  "validated_against_real_concrete": false,
+  "interpretation": "synthetic-set separability, not real-concrete accuracy"
+}
